@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "797746834075",
+    "project_id": "ezaanamin-7cbcf",
+    "storage_bucket": "ezaanamin-7cbcf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797746834075:android:3b58c9a48ed7f74be2743e",
+        "android_client_info": {
+          "package_name": "com.aurestra"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC70UKdLhuQKVBE0fhn4ggdkQQVhDafIFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797746834075:android:7cdee1de7f615869e2743e",
+        "android_client_info": {
+          "package_name": "com.aurestra.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC70UKdLhuQKVBE0fhn4ggdkQQVhDafIFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
