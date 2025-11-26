@@ -8,9 +8,14 @@ from dateutil.relativedelta import relativedelta
 from fetchers import (
     fetch_latest_bank_email,
     fetch_latest_wallet_email,
-    fetch_and_save_easypaisa_emails
-)
+    fetch_and_save_easypaisa_emails,
+    calculate_combined_summary
 
+)
+from fcm_utils import send_push_to_all
+from sqlalchemy import func
+from sqlalchemy import desc
+from sqlalchemy import extract
 app = Flask(__name__)
 
 # -------------------------
@@ -31,9 +36,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
-# -------------------------
-# DATABASE INSERT FUNCTION
-# -------------------------
+
 def save_monthly_summary(month, total_open, total_close):
     with app.app_context():
         # Check if entry already exists
@@ -323,20 +326,123 @@ def get_budget_history():
 # -------------------------
 # CREATE TABLES AND RUN SERVER
 # -------------------------
+DEVICE_TOKENS = set()   # You can store in DB later
 
-@app.route("/api/easypaisa/latest", methods=["POST"])
+@app.route("/api/register-device", methods=["POST"])
+def register_device():
+    data = request.get_json()
+    token = data.get("token")
+
+    if token:
+        DEVICE_TOKENS.add(token)
+        print("📥 Registered device token:", token)
+        return {"status": "success"}, 200
+
+    return {"error": "Token missing"}, 400
+
+@app.route("/api/easypaisa/latest", methods=["GET", "POST"])
 def easypaisa_latest():
     """
-    Fetch unread Easypaisa transaction emails.
-    Looks for emails from amin.ezaan@gmail.com
-    with subject or body containing 'Easypaisa Transaction Details'.
-    Downloads any image attachments.
+    Fetch unread Easypaisa transaction emails, save them, and notify devices.
     """
-    data = fetch_and_save_easypaisa_emails()
-    return jsonify(data)
+    result = fetch_and_save_easypaisa_emails()
+    
+    # Only send notification if there are new transactions
+    if result.get("count", 0) > 0:
+        title = "New Easypaisa Transactions"
+        body = f"You have {result['count']} new transaction(s) saved."
+        try:
+            send_push_to_all(title, body)
+            print("✅ Push notification sent to all registered devices.")
+        except Exception as e:
+            print(f"❌ Failed to send push notification: {e}")
+    
+    return jsonify(result)
 
+
+@app.route("/api/send-test", methods=["POST"])
+def send_test_push():
+    from fcm_utils import send_push_to_all
+    from app import DEVICE_TOKENS
+
+    send_push_to_all(
+        title="Test FCM",
+        body="Backend successfully triggered a push",
+        tokens=list(DEVICE_TOKENS)
+    )
+    return {"status": "sent"}, 200
+
+
+@app.route('/api/latest-transactions', methods=['GET'])
+def latest_transactions():
+    try:
+        # Fetch top 4 latest transactions
+        transactions = (
+            db.session.query(Transaction)
+            .order_by(desc(Transaction.date))
+            .limit(4)
+            .all()
+        )
+
+        result = [
+            {
+                "id": txn.id,
+                "source": txn.source,
+                "date": txn.date.strftime("%Y-%m-%d"),
+                "purpose": txn.purpose,
+                "amount": txn.amount,
+                "sender": txn.sender
+            }
+            for txn in transactions
+        ]
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# -------------------------
+# Top 4 spending categories for latest month
+# -------------------------
+@app.route('/api/transactions/top-categories', methods=['GET'])
+def top_spending_categories():
+    # Get latest transaction date
+    latest_date = db.session.query(func.max(Transaction.date)).scalar()
+    if not latest_date:
+        return jsonify([]), 200
+
+    latest_year = latest_date.year
+    latest_month = latest_date.month
+    print("Latest year-month for transactions:", latest_year, latest_month)
+
+    # Aggregate spending by category
+    # FIX: Removed the Transaction.amount < 0 filter. 
+    # Assumes expenses are positive amounts OR you will need a separate column 
+    # (like 'type') to distinguish income/expense if amount is always positive.
+    categories = (
+        db.session.query(
+            Transaction.purpose.label("category"),
+            func.sum(Transaction.amount).label("total_spent")
+        )
+        .filter(
+            extract('year', Transaction.date) == latest_year,
+            extract('month', Transaction.date) == latest_month,
+            Transaction.purpose.isnot(None),  # Only include categorized transactions
+            Transaction.amount > 0  # Assuming positive amounts are expenses based on your data
+        )
+        .group_by(Transaction.purpose)
+        .order_by(func.sum(Transaction.amount).desc())  # Largest sum = most spending
+        .limit(4)
+        .all()
+    )
+
+    result = [
+        {"category": cat.category, "total_spent": cat.total_spent}
+        for cat in categories
+    ]
+    return jsonify(result), 200
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()  # this ensures all tables from your models exist
+        db.create_all()
         print("✅ Tables ensured in database")
+
     app.run(host="0.0.0.0", port=5000, debug=True)

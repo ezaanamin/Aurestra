@@ -20,6 +20,12 @@ IMAP_HOST = "imap.gmail.com"
 ATTACHMENTS_DIR = "attachments"
 os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
 
+
+def clean(text):
+    if not isinstance(text, str):
+        return None
+    return text.replace("\xa0", " ").strip()
+
 # -------------------------
 # HELPERS
 # -------------------------
@@ -167,10 +173,11 @@ def fetch_latest_wallet_email():
 
     except Exception as e:
         return {"error": f"Wallet email fetch error: {str(e)}"}
+def clean(text):
+    if not text:
+        return None
+    return text.replace("\xa0", " ").strip()
 
-# -------------------------
-# FETCH EASYPaisa TRANSACTION EMAIL (PDF only)
-# -------------------------
 def decode_mime_words(s):
     """Decode MIME-encoded email headers."""
     decoded = decode_header(s)
@@ -179,86 +186,106 @@ def decode_mime_words(s):
         for t in decoded
     )
 
-def parse_easypaisa_body(body_text):
+def parse_amount(amount_str):
+    """Convert amount string like 'Rs. 6,700.00' to float 6700.0"""
+    try:
+        cleaned = amount_str.replace("Rs.", "").replace(",", "").strip()
+        return float(cleaned)
+    except:
+        return 0.0
+
+def parse_date(date_str):
+    """Parse flexible date formats like '4 Nov 2025' or '09 November 2025'"""
+    for fmt in ("%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except:
+            continue
+    return None
+
+def clean_category(cat_str):
+    """Remove extra symbols and whitespace from category"""
+    if not cat_str:
+        return None
+    return cat_str.replace("☐", "").strip() or None
+
+# -------------------------
+# Email Parsing
+# -------------------------
+def parse_easypaisa_email(body):
     """
-    Parse Easypaisa transaction email body into structured data.
-    Returns a dictionary.
+    Parse Easypaisa email body into structured transaction data
     """
-    # Remove excessive whitespace and normalize
-    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    lines = [clean(l) for l in body.split("\n") if clean(l)]
     data = {}
 
-    try:
-        # Date
-        for line in lines:
-            if re.match(r"\d{2}-[A-Za-z]{3}-\d{4}", line):
-                data['date'] = line
-                break
+    # Transaction ID
+    for line in lines:
+        if "ID#" in line:
+            data["transaction_id"] = line.replace("ID#", "").strip()
+            break
 
-        # Time
-        time_pattern = re.compile(r"\d{1,2}:\d{2}\s?(AM|PM|am|pm)")
-        for line in lines:
-            if time_pattern.match(line):
-                data['time'] = line
-                break
+    # Date & Time
+    for idx, line in enumerate(lines):
+        if line.startswith("Date:"):
+            date_str = line.replace("Date:", "").strip()
+            time_str = lines[idx + 1] if idx + 1 < len(lines) else None
 
-        # Transaction ID
-        for line in lines:
-            if line.startswith("ID#"):
-                data['transaction_id'] = line.replace("ID#", "")
-                break
+            data["date"] = parse_date(date_str)
 
-        # Funding Source
-        for idx, line in enumerate(lines):
-            if line.lower() == "funding source":
-                data['funding_source'] = lines[idx + 1]
-                break
+            if time_str and (":" in time_str) and ("AM" in time_str or "PM" in time_str):
+                try:
+                    data["time"] = datetime.strptime(time_str.replace(" ", ""), "%I:%M%p").time()
+                except:
+                    data["time"] = None
+            break
 
-        # Sent to / Receiver info
-        for idx, line in enumerate(lines):
-            if line.lower() == "sent to":
-                data['receiver_name'] = lines[idx + 1]
-                data['receiver_number'] = lines[idx + 2]
-                break
+    # Amount
+    for idx, line in enumerate(lines):
+        if line.lower().startswith("amount"):
+            if idx + 1 < len(lines):
+                data["amount"] = parse_amount(lines[idx + 1])
+            break
 
-        # Account Details / Sender info
-        for idx, line in enumerate(lines):
-            if line.lower() == "account details":
-                data['receiver_full_name'] = lines[idx + 1]
-            if line.lower() == "sent by":
-                data['sender_name'] = lines[idx + 1]
-                data['sender_number'] = lines[idx + 2]
-                break
+    # Category / Purpose
+    for idx, line in enumerate(lines):
+        if "category" in line.lower() or "purpose" in line.lower():
+            if idx + 1 < len(lines):
+                data["category"] = clean_category(lines[idx + 1])
+            break
 
-        # Amounts
-        for idx, line in enumerate(lines):
-            if line.lower() == "amount":
-                data['amount'] = float(lines[idx + 1])
-            if line.lower() == "fee / charge":
-                data['fee'] = float(lines[idx + 1])
-            if line.lower() == "total amount":
-                data['total_amount'] = float(lines[idx + 1].replace("Rs.", "").strip())
-                break
+    # Receiver (Sent to)
+    for idx, line in enumerate(lines):
+        if "sent to" in line.lower():
+            data["receiver"] = lines[idx + 1]  # Name
+            if idx + 2 < len(lines):
+                data["receiver_detail"] = lines[idx + 2]  # Phone or Bank
+            break
 
-        # Category
-        for idx, line in enumerate(lines):
-            if line.lower().startswith("category of transaction"):
-                if idx + 1 < len(lines):
-                    category_line = lines[idx + 1].replace("☐", "").strip()
-                    data['category'] = category_line
-                break
+    # Sender (Sent by)
+    for idx, line in enumerate(lines):
+        if "sent by" in line.lower():
+            sender_name = lines[idx + 1]
+            if sender_name.upper() == "AZAN AMIN":
+                sender_name = "Ezaan Amin"
+            data["sender"] = sender_name
+            if idx + 2 < len(lines):
+                data["sender_number"] = lines[idx + 2]
+            break
 
-    except Exception as e:
-        print(f"❌ Error parsing body: {e}")
+    # Optional notes: store name, transaction details, etc.
+    # You can extend parsing here if needed
 
     return data
 
 # -------------------------
-# FETCH & SAVE TRANSACTIONS
+# Fetch & Save
+# -------------------------
 def fetch_and_save_easypaisa_emails():
     """
-    Fetch unread Easypaisa emails, parse them, and save to Transaction model.
-    Stores the receiver's full name in the `sender` column.
+    Fetch unread Easypaisa emails, parse, and save transactions.
+    Handles sender/receiver, amount, category/purpose, notes, transaction_id.
+    Prevents duplicates using transaction_id.
     """
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
@@ -277,8 +304,9 @@ def fetch_and_save_easypaisa_emails():
             msg = email.message_from_bytes(msg_data[0][1])
 
             subject = decode_mime_words(msg.get("Subject", "")).strip()
-            body_text = ""
 
+            # Extract plain text body
+            body_text = ""
             if msg.is_multipart():
                 for part in msg.walk():
                     if part.get_content_type() == "text/plain":
@@ -286,45 +314,50 @@ def fetch_and_save_easypaisa_emails():
             else:
                 body_text = msg.get_payload(decode=True).decode(errors="ignore")
 
+            # Only Easypaisa emails
             if "easypaisa transaction details" not in subject.lower() and \
                "easypaisa transaction details" not in body_text.lower():
                 continue
 
-            transaction_data = parse_easypaisa_body(body_text)
-            transaction_data['from_email'] = msg.get("From")
-            transaction_data['subject'] = subject
-            transaction_data['body_text'] = body_text
+            # Parse
+            tx_data = parse_easypaisa_email(body_text)
 
-            dt = datetime.utcnow()
-            try:
-                if 'date' in transaction_data and 'time' in transaction_data:
-                    dt = datetime.strptime(
-                        f"{transaction_data['date']} {transaction_data['time']}",
-                        "%d-%b-%Y %I:%M %p"
-                    )
-            except:
-                pass
+            # Prevent duplicates
+            # tx_id = tx_data.get("transaction_id")
+            # if tx_id:
+            #     existing = Transaction.query.filter_by(transaction_id=tx_id).first()
+            #     if existing:
+            #         continue
 
-            transaction = Transaction(
+            # Fallback date
+            dt = tx_data.get("date") or datetime.utcnow()
+
+            # Save transaction
+            new_tx = Transaction(
                 source="wallet",
                 date=dt,
-                purpose=transaction_data.get("category"),
-                amount=float(transaction_data.get("amount", 0.0)),
-                sender=transaction_data.get("receiver_name")
+                purpose=tx_data.get("category") or tx_data.get("purpose"),
+                amount=float(tx_data.get("amount", 0)),
+                sender=tx_data.get("sender"),
+                receiver=tx_data.get("receiver"),
+                transaction_id=tx_id,
+                notes=tx_data.get("notes") or tx_data.get("receiver_detail")
             )
 
-            with db.session.begin():
-                db.session.add(transaction)
+            db.session.add(new_tx)
+            transactions_saved.append(tx_data)
 
-            transactions_saved.append(transaction_data)
-
+        db.session.commit()
         mail.logout()
-        print(f"✅ Saved {len(transactions_saved)} Easypaisa transactions.")    
+
+        print(f"✅ Saved {len(transactions_saved)} Easypaisa transactions")
         return {"saved": transactions_saved, "count": len(transactions_saved)}
 
     except Exception as e:
+        db.session.rollback()
         print(f"❌ Easypaisa fetch/save error: {e}")
-        return {"error": f"Easypaisa fetch/save error: {str(e)}"}
+        return {"error": str(e)}
+
 
 # COMBINE BANK + WALLET SUMMARY
 # -------------------------

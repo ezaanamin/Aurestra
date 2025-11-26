@@ -1,7 +1,4 @@
-/**
- * @format
- */
-
+import React, { useEffect } from 'react';
 import { AppRegistry } from 'react-native';
 import App from './App';
 import { name as appName } from './app.json';
@@ -11,103 +8,127 @@ import BackgroundFetch from 'react-native-background-fetch';
 import axios from 'axios';
 import messaging from '@react-native-firebase/messaging';
 import notifee, { AndroidImportance } from '@notifee/react-native';
+import { API_BASE_URL } from './API_URL';
 
-const API_BASE_URL = 'https://01df9cf68733.ngrok-free.app'; // replace with your backend
-
-// --- Send push notification helper ---
-const sendPushNotification = async (title, message) => {
-  // Create a channel (required for Android)
+// ---------------------------
+// Local Notification
+// ---------------------------
+const sendLocalNotification = async (title, message) => {
   const channelId = await notifee.createChannel({
     id: 'default',
-    name: 'Default Channel',
+    name: 'Default',
     importance: AndroidImportance.HIGH,
   });
 
   await notifee.displayNotification({
     title,
     body: message,
-    android: {
-      channelId,
-      smallIcon: 'ic_launcher', // change if you have custom icon
-    },
+    android: { channelId, smallIcon: 'ic_launcher' },
   });
 };
 
-// --- Check for new Easypaisa transactions ---
-const checkNewEasypaisaTransactions = async () => {
+// ---------------------------
+// Device Token Registration
+// ---------------------------
+const registerDeviceToken = async () => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/api/easypaisa/latest`);
-    if (response.data.count && response.data.count > 0) {
-      await sendPushNotification(
-        'New Easypaisa Transaction',
-        `You have ${response.data.count} new transaction(s) saved.`
-      );
-    } else {
-      console.log("[Easypaisa] No new transactions.");
-    }
-  } catch (error) {
-    console.log('[Easypaisa Check] Error:', error.response?.data || error.message);
+    const token = await messaging().getToken();
+    console.log('📱 FCM Token:', token);
+    await axios.post(`${API_BASE_URL}/api/register-device`, { token });
+    console.log('📲 Device token sent to backend');
+  } catch (err) {
+    console.log('❌ Token registration failed:', err.message);
   }
 };
 
-// --- App initialization ---
-const initApp = async () => {
-  // Request permission for notifications
-  const authStatus = await messaging().requestPermission();
-  console.log('[FCM] Authorization status:', authStatus);
+// ---------------------------
+// Check Easypaisa Transactions
+// ---------------------------
+const checkNewEasypaisaTransactions = async () => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/api/easypaisa/latest`);
+    const count = response.data.count || 0;
 
-  // 🔹 TEST PUSH NOTIFICATION ON APP START
-  await sendPushNotification('Test Notification', 'This notification appears immediately on app startup.');
-
-  // Check Easypaisa emails immediately
-  await checkNewEasypaisaTransactions();
+    if (count > 0) {
+      await sendLocalNotification(
+        'New Easypaisa Transaction',
+        `You have ${count} new transaction(s)`
+      );
+      console.log(`[Easypaisa] ${count} new transaction(s) found.`);
+    } else {
+      console.log('[Easypaisa] No new transactions.');
+    }
+  } catch (err) {
+    console.log('[Easypaisa] Error fetching transactions:', err.message);
+  }
 };
 
-// --- Background fetch handler ---
+// ---------------------------
+// Background Fetch Task
+// ---------------------------
 const onBackgroundFetch = async (taskId) => {
-  console.log(`[BackgroundFetch] Task executed: ${taskId}`);
+  console.log('[BackgroundFetch] Task executed:', taskId);
   await checkNewEasypaisaTransactions();
   BackgroundFetch.finish(taskId);
 };
 
-// --- Configure BackgroundFetch ---
-BackgroundFetch.configure(
-  {
-    minimumFetchInterval: 15, // minutes
-    stopOnTerminate: false,
-    startOnBoot: true,
-    enableHeadless: true,
-    requiredNetworkType: BackgroundFetch.NETWORK_TYPE_ANY,
-  },
-  onBackgroundFetch,
-  (error) => {
-    console.error('[BackgroundFetch] failed to start', error);
-  }
-);
+// ---------------------------
+// Background Fetch Configuration
+// ---------------------------
+const configureBackgroundFetch = () => {
+  BackgroundFetch.configure(
+    {
+      minimumFetchInterval: 15, // minutes
+      stopOnTerminate: false,
+      startOnBoot: true,
+      enableHeadless: true,
+      requiredNetworkType: BackgroundFetch.NETWORK_TYPE_ANY,
+    },
+    onBackgroundFetch,
+    (err) => console.log('❌ BackgroundFetch failed to start:', err)
+  );
 
-// --- App registry ---
-const ReduxApp = () => (
-  <Provider store={store}>
-    <App />
-  </Provider>
-);
+  BackgroundFetch.status((status) => {
+    const msg = {
+      [BackgroundFetch.STATUS_RESTRICTED]: 'restricted',
+      [BackgroundFetch.STATUS_DENIED]: 'denied',
+      [BackgroundFetch.STATUS_AVAILABLE]: 'available',
+    }[status];
+    console.log('[BackgroundFetch] Status:', msg);
+  });
+};
+
+// ---------------------------
+// App Initialization
+// ---------------------------
+const initApp = async () => {
+  try {
+    const authStatus = await messaging().requestPermission();
+    console.log('[FCM] Permission:', authStatus);
+
+    await registerDeviceToken();
+    await checkNewEasypaisaTransactions(); // First check on startup
+    await sendLocalNotification('Test Notification', 'App started successfully');
+
+    configureBackgroundFetch(); // Setup background fetch
+  } catch (err) {
+    console.log('❌ initApp error:', err.message);
+  }
+};
+
+// ---------------------------
+// Redux App Wrapper
+// ---------------------------
+const ReduxApp = () => {
+  useEffect(() => {
+    initApp();
+  }, []);
+
+  return (
+    <Provider store={store}>
+      <App />
+    </Provider>
+  );
+};
 
 AppRegistry.registerComponent(appName, () => ReduxApp);
-
-// --- BackgroundFetch status logging ---
-BackgroundFetch.status((status) => {
-  switch (status) {
-    case BackgroundFetch.STATUS_RESTRICTED:
-      console.log("Background fetch restricted");
-      break;
-    case BackgroundFetch.STATUS_DENIED:
-      console.log("Background fetch denied");
-      break;
-    case BackgroundFetch.STATUS_AVAILABLE:
-      console.log("Background fetch available");
-      break;
-  }
-});
-
-// --- Start the app initialization ---
-initApp();

@@ -11,66 +11,49 @@ import {
   Platform,
   TouchableOpacity,
   ActivityIndicator,
+  Dimensions,
 } from 'react-native';
-// --- REDUX IMPORTS ---
 import { useDispatch, useSelector } from 'react-redux';
-import { 
-  fetchBudget, 
-  saveBudget, 
-} from "../API/slice/API"
-// --- END REDUX IMPORTS ---
+import { fetchBudget, saveBudget } from '../API/slice/API';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import LinearGradient from 'react-native-linear-gradient';
 
-import BottomBar from '../components/BottomBar'; 
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons'; 
-
+const { width } = Dimensions.get('window');
 
 const BudgetScreen = ({ navigation }) => {
-  // Local state for user input
   const [monthlyIncome, setMonthlyIncome] = useState('');
-  
   const [showNoBudgetPrompt, setShowNoBudgetPrompt] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
-  // --- REDUX HOOKS ---
   const dispatch = useDispatch();
   const { budget, budgetStatus, budgetSaveStatus, budgetError } = useSelector(
     (state) => state.API
   );
-  const saveStatus = budgetSaveStatus; 
-  // --- END REDUX HOOKS ---
+  const saveStatus = budgetSaveStatus;
 
   const incomeValue = parseFloat(monthlyIncome) || 0;
-  
-  // --- BUDGET DISPLAY LOGIC (UPDATED) ---
-  let currentNeeds, currentWants, currentSavings, currentDisplayTotal;
 
-  // Check if the input value matches the loaded budget total
+  // Budget calculation logic
+  let currentNeeds, currentWants, currentSavings, currentDisplayTotal;
   const isInputDifferentFromSaved = budget && budget.total_budget && incomeValue !== parseFloat(budget.total_budget);
 
   if (incomeValue > 0 && (isInputDifferentFromSaved || !budget || budget.total_budget === undefined)) {
-    // Scenario 1: User is actively typing OR there's no saved budget.
-    // Show the live calculated 50/30/20 breakdown for preview.
     currentDisplayTotal = incomeValue;
     currentNeeds = incomeValue * 0.50;
     currentWants = incomeValue * 0.30;
     currentSavings = incomeValue * 0.20;
   } else if (budgetStatus === 'succeeded' && budget && budget.total_budget > 0) {
-    // Scenario 2: Budget loaded successfully and input matches (or is clear).
-    // Show the saved breakdown from the API.
     currentDisplayTotal = budget.total_budget;
     currentNeeds = budget.needs;
     currentWants = budget.wants;
     currentSavings = budget.saving;
   } else {
-    // Scenario 3: Default to zero (no budget saved and no input)
     currentDisplayTotal = 0;
     currentNeeds = 0;
     currentWants = 0;
     currentSavings = 0;
   }
-  // --- END BUDGET DISPLAY LOGIC ---
 
-
-  // 1. FETCH BUDGET ON LOAD AND UPDATE LOCAL STATE
   useEffect(() => {
     dispatch(fetchBudget());
   }, [dispatch]);
@@ -78,399 +61,700 @@ const BudgetScreen = ({ navigation }) => {
   useEffect(() => {
     if (budgetStatus === 'succeeded') {
       if (budget && budget.total_budget) {
-        // If budget is found, update the local input state and dismiss prompt
         setMonthlyIncome(String(budget.total_budget));
         setShowNoBudgetPrompt(false);
       } else if (budget === null) {
-        // If budget is null (404 from API), show the prompt to set one
         setShowNoBudgetPrompt(true);
-        setMonthlyIncome(''); // Clear input if no budget is set
+        setMonthlyIncome('');
       }
     }
     if (budgetStatus === 'failed' && budgetError && !budgetError?.message.includes('404')) {
-        console.error("Budget Fetch Error:", budgetError);
+      console.error('Budget Fetch Error:', budgetError);
     }
   }, [budgetStatus, budget, budgetError]);
-  
-  // Helper function to format currency (PKR)
+
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('en-PK', {
       style: 'currency',
       currency: 'PKR',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
     }).format(amount);
   };
 
-  // Function to save the budget (UPDATED)
   const saveBudgetHandler = () => {
     if (incomeValue <= 0) {
-      console.error("Cannot save a budget with zero income.");
+      console.error('Cannot save a budget with zero income.');
       return;
     }
-    
-    // Construct the full data object to send to the API, using the 50/30/20 calculation
-    // based on the income the user entered.
+
     const budgetData = {
-        income: incomeValue,
-        needs: incomeValue * 0.50,
-        wants: incomeValue * 0.30,
-        saving: incomeValue * 0.20,
+      income: incomeValue,
+      needs: incomeValue * 0.50,
+      wants: incomeValue * 0.30,
+      saving: incomeValue * 0.20,
     };
 
-    // Dispatch the Redux thunk with the full data object
     dispatch(saveBudget(budgetData));
+    setIsEditing(false);
   };
 
   const getSaveButtonText = () => {
     if (saveStatus === 'saving') return 'Saving...';
-    if (saveStatus === 'success') return (budgetError?.message || 'Saved!');
-    if (saveStatus === 'error') return (budgetError?.message || 'Save Failed');
+    if (saveStatus === 'success') return budgetError?.message || 'Saved!';
+    if (saveStatus === 'error') return budgetError?.message || 'Save Failed';
     return 'Save Budget';
   };
-  
-  // Display the current month for the prompt
+
   const getCurrentMonthYear = () => {
     return new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
   };
-  
-  // If fetching for the first time, show a full screen loader
-  // if (budgetStatus === 'loading') {
-  //   return (
-  //     <View style={[styles.container, styles.centerScreen]}>
-  //       <ActivityIndicator size="large" color="#4299e1" />
-  //       <Text style={{ marginTop: 10, color: '#333' }}>Loading budget data...</Text>
-  //     </View>
-  //   );
-  // }
+
+  const budgetCategories = [
+    {
+      title: 'Needs',
+      percentage: 50,
+      amount: currentNeeds,
+      icon: 'home-variant',
+      color: '#10B981',
+      gradient: ['#10B981', '#059669'],
+      description: 'Rent, utilities, groceries, transport',
+      examples: ['Housing', 'Food', 'Bills', 'Insurance'],
+    },
+    {
+      title: 'Wants',
+      percentage: 30,
+      amount: currentWants,
+      icon: 'shopping',
+      color: '#F59E0B',
+      gradient: ['#F59E0B', '#D97706'],
+      description: 'Entertainment, dining, subscriptions',
+      examples: ['Netflix', 'Restaurants', 'Shopping', 'Hobbies'],
+    },
+    {
+      title: 'Savings',
+      percentage: 20,
+      amount: currentSavings,
+      icon: 'piggy-bank',
+      color: '#3B82F6',
+      gradient: ['#3B82F6', '#2563EB'],
+      description: 'Emergency fund, investments, debt',
+      examples: ['Savings', 'Stocks', 'Retirement', 'Debt Pay'],
+    },
+  ];
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#4299e1" />
-      <View style={styles.headerBackground}>
-        <SafeAreaView style={styles.headerContent}>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
+
+      {/* Modern Header */}
+      <LinearGradient colors={['#1E293B', '#334155']} style={styles.header}>
+        <View style={styles.headerContent}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Icon name="arrow-left" size={24} color="#fff" />
+            <Icon name="arrow-left" size={24} color="#FFFFFF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Budget Planner</Text>
-        </SafeAreaView>
-      </View>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle}>Budget Planner</Text>
+            <Text style={styles.headerSubtitle}>{getCurrentMonthYear()}</Text>
+          </View>
+          <TouchableOpacity style={styles.headerIconButton}>
+            <Icon name="information-outline" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-        
-          {/* --- NO BUDGET PROMPT --- */}
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* No Budget Prompt */}
           {showNoBudgetPrompt && (
             <View style={styles.promptCard}>
-              <Icon name="cash-multiple" size={30} color="#e53e3e" />
-              <Text style={styles.promptTitle}>Budget Not Set!</Text>
-              <Text style={styles.promptText}>
-                Please set your monthly income budget for **{getCurrentMonthYear()}** to get started with the 50/30/20 breakdown.
-              </Text>
-              <TouchableOpacity 
-                  style={styles.promptButton} 
-                  onPress={() => setShowNoBudgetPrompt(false)}
+              <LinearGradient
+                colors={['#FEF3C7', '#FDE68A']}
+                style={styles.promptGradient}
               >
-                <Text style={styles.promptButtonText}>Got It</Text>
-              </TouchableOpacity>
+                <View style={styles.promptIconContainer}>
+                  <Icon name="alert-circle" size={40} color="#F59E0B" />
+                </View>
+                <Text style={styles.promptTitle}>Budget Not Set</Text>
+                <Text style={styles.promptText}>
+                  Set your monthly income to unlock the 50/30/20 budget breakdown and start
+                  tracking your finances effectively.
+                </Text>
+                <TouchableOpacity
+                  style={styles.promptButton}
+                  onPress={() => setShowNoBudgetPrompt(false)}
+                >
+                  <Text style={styles.promptButtonText}>Get Started</Text>
+                </TouchableOpacity>
+              </LinearGradient>
             </View>
           )}
-        
-          {/* Income Input Section */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Your Monthly Income (PKR)</Text>
-            <View style={styles.inputContainer}>
-              <Text style={styles.currencySymbol}>Rs</Text>
-              <TextInput
-                style={styles.incomeInput}
-                keyboardType="numeric"
-                placeholder="0.00"
-                placeholderTextColor="#999"
-                value={monthlyIncome}
-                onChangeText={(text) => setMonthlyIncome(text.replace(/[^0-9.]/g, ''))}
-              />
-            </View>
-          </View>
 
-          {/* Budget Breakdown Section */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>50/30/20 Rule Breakdown</Text>
-            {/* Use currentDisplayTotal for the check */}
-            {currentDisplayTotal === 0 ? (
-              <Text style={styles.placeholderText}>
-                Enter your monthly income above to see your budget breakdown.
-              </Text>
-            ) : (
-              <View>
-                {/* Needs (50%) - Use currentNeeds */}
-                <View style={[styles.budgetItem, styles.needsBackground]}>
-                  <Icon name="home" size={24} color="#fff" style={styles.budgetItemIcon} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.budgetItemTitle}>Needs (50%)</Text>
-                    <Text style={styles.budgetItemDescription}>
-                      Housing, utilities, groceries, transportation, insurance, minimum debt payments.
-                    </Text>
-                  </View>
-                  <Text style={styles.budgetItemAmount}>{formatCurrency(currentNeeds)}</Text>
-                </View>
-
-                {/* Wants (30%) - Use currentWants */}
-                <View style={[styles.budgetItem, styles.wantsBackground]}>
-                  <Icon name="shopping" size={24} color="#fff" style={styles.budgetItemIcon} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.budgetItemTitle}>Wants (30%)</Text>
-                    <Text style={styles.budgetItemDescription}>
-                      Entertainment, dining out, subscriptions, hobbies, shopping.
-                    </Text>
-                  </View>
-                  <Text style={styles.budgetItemAmount}>{formatCurrency(currentWants)}</Text>
-                </View>
-
-                {/* Savings & Debt (20%) - Use currentSavings */}
-                <View style={[styles.budgetItem, styles.savingsBackground]}>
-                  <Icon name="piggy-bank" size={24} color="#fff" style={styles.budgetItemIcon} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.budgetItemTitle}>Savings & Debt (20%)</Text>
-                    <Text style={styles.budgetItemDescription}>
-                      Emergency fund, investments, extra debt payments, retirement.
-                    </Text>
-                  </View>
-                  <Text style={styles.budgetItemAmount}>{formatCurrency(currentSavings)}</Text>
-                </View>
-
-                {/* Save Button */}
+          {/* Income Input Card */}
+          <View style={styles.incomeCard}>
+            <View style={styles.incomeHeader}>
+              <Text style={styles.incomeLabel}>Monthly Income</Text>
+              {!isEditing && currentDisplayTotal > 0 && (
                 <TouchableOpacity
-                  style={[
-                    styles.saveButton,
-                    saveStatus === 'success' && styles.saveButtonSuccess,
-                    saveStatus === 'error' && styles.saveButtonError,
-                    (saveStatus === 'saving' || incomeValue <= 0) && styles.saveButtonDisabled,
-                  ]}
-                  onPress={saveBudgetHandler} 
-                  disabled={saveStatus === 'saving' || incomeValue <= 0}
+                  onPress={() => setIsEditing(true)}
+                  style={styles.editButton}
+                >
+                  <Icon name="pencil" size={16} color="#3B82F6" />
+                  <Text style={styles.editButtonText}>Edit</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {isEditing || currentDisplayTotal === 0 ? (
+              <View style={styles.inputContainer}>
+                <Text style={styles.currencySymbol}>PKR</Text>
+                <TextInput
+                  style={styles.incomeInput}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor="#CBD5E1"
+                  value={monthlyIncome}
+                  onChangeText={(text) => setMonthlyIncome(text.replace(/[^0-9.]/g, ''))}
+                  autoFocus={isEditing}
+                />
+              </View>
+            ) : (
+              <Text style={styles.incomeDisplay}>{formatCurrency(currentDisplayTotal)}</Text>
+            )}
+
+            {isEditing && (
+              <View style={styles.inputActions}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => {
+                    setIsEditing(false);
+                    setMonthlyIncome(budget?.total_budget ? String(budget.total_budget) : '');
+                  }}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.applyButton, incomeValue <= 0 && styles.applyButtonDisabled]}
+                  onPress={saveBudgetHandler}
+                  disabled={incomeValue <= 0 || saveStatus === 'saving'}
                 >
                   {saveStatus === 'saving' ? (
-                    <ActivityIndicator color="#fff" />
+                    <ActivityIndicator color="#FFFFFF" size="small" />
                   ) : (
-                    <Text style={styles.saveButtonText}>{getSaveButtonText()}</Text>
+                    <Text style={styles.applyButtonText}>Apply</Text>
                   )}
                 </TouchableOpacity>
-                
-                {/* Display Redux success message */}
-                {(saveStatus === 'success' && budgetError?.message) && (
-                    <Text style={[styles.saveErrorText, {color: '#48bb78'}]}>{budgetError.message}</Text>
-                )}
-                
-                {/* Display Redux error message */}
-                {(saveStatus === 'error' && budgetError?.message) && (
-                  <Text style={styles.saveErrorText}>{budgetError.message}</Text>
-                )}
               </View>
             )}
           </View>
+
+          {/* 50/30/20 Rule Info Card */}
+          <View style={styles.ruleCard}>
+            <View style={styles.ruleHeader}>
+              <Icon name="chart-donut" size={24} color="#3B82F6" />
+              <Text style={styles.ruleTitle}>50/30/20 Rule</Text>
+            </View>
+            <Text style={styles.ruleDescription}>
+              A simple budgeting method that divides your after-tax income into three spending
+              categories: 50% for needs, 30% for wants, and 20% for savings.
+            </Text>
+          </View>
+
+          {/* Budget Breakdown */}
+          {currentDisplayTotal === 0 ? (
+            <View style={styles.emptyState}>
+              <Icon name="wallet-outline" size={80} color="#CBD5E1" />
+              <Text style={styles.emptyStateTitle}>No Budget Set</Text>
+              <Text style={styles.emptyStateText}>
+                Enter your monthly income above to see your personalized budget breakdown
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.breakdownContainer}>
+              <Text style={styles.breakdownTitle}>Your Budget Breakdown</Text>
+
+              {budgetCategories.map((category, index) => {
+                const percentageOfTotal = currentDisplayTotal > 0 
+                  ? (category.amount / currentDisplayTotal) * 100 
+                  : 0;
+
+                return (
+                  <View key={index} style={styles.categoryCard}>
+                    <LinearGradient
+                      colors={category.gradient}
+                      style={styles.categoryGradient}
+                    >
+                      {/* Category Header */}
+                      <View style={styles.categoryHeader}>
+                        <View style={styles.categoryIconWrapper}>
+                          <Icon name={category.icon} size={28} color="#FFFFFF" />
+                        </View>
+                        <View style={styles.categoryInfo}>
+                          <Text style={styles.categoryTitle}>
+                            {category.title} ({category.percentage}%)
+                          </Text>
+                          <Text style={styles.categoryDescription}>{category.description}</Text>
+                        </View>
+                        <View style={styles.categoryBadge}>
+                          <Text style={styles.categoryPercentage}>{category.percentage}%</Text>
+                        </View>
+                      </View>
+
+                      {/* Amount Display */}
+                      <Text style={styles.categoryAmount}>{formatCurrency(category.amount)}</Text>
+
+                      {/* Progress Bar */}
+                      <View style={styles.progressBarContainer}>
+                        <View
+                          style={[styles.progressBar, { width: `${percentageOfTotal}%` }]}
+                        />
+                      </View>
+
+                      {/* Examples */}
+                      <View style={styles.examplesContainer}>
+                        {category.examples.map((example, idx) => (
+                          <View key={idx} style={styles.exampleTag}>
+                            <Text style={styles.exampleText}>{example}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </LinearGradient>
+                  </View>
+                );
+              })}
+
+              {/* Total Summary Card */}
+              <View style={styles.summaryCard}>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>Total Budget</Text>
+                  <Text style={styles.summaryAmount}>{formatCurrency(currentDisplayTotal)}</Text>
+                </View>
+                <View style={styles.summaryDivider} />
+                <View style={styles.summaryBreakdown}>
+                  <View style={styles.summaryItem}>
+                    <View style={[styles.summaryDot, { backgroundColor: '#10B981' }]} />
+                    <Text style={styles.summaryItemText}>{formatCurrency(currentNeeds)}</Text>
+                  </View>
+                  <View style={styles.summaryItem}>
+                    <View style={[styles.summaryDot, { backgroundColor: '#F59E0B' }]} />
+                    <Text style={styles.summaryItemText}>{formatCurrency(currentWants)}</Text>
+                  </View>
+                  <View style={styles.summaryItem}>
+                    <View style={[styles.summaryDot, { backgroundColor: '#3B82F6' }]} />
+                    <Text style={styles.summaryItemText}>{formatCurrency(currentSavings)}</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Status Messages */}
+              {saveStatus === 'success' && budgetError?.message && (
+                <View style={styles.successMessage}>
+                  <Icon name="check-circle" size={20} color="#10B981" />
+                  <Text style={styles.successText}>{budgetError.message}</Text>
+                </View>
+              )}
+
+              {saveStatus === 'error' && budgetError?.message && (
+                <View style={styles.errorMessage}>
+                  <Icon name="alert-circle" size={20} color="#EF4444" />
+                  <Text style={styles.errorText}>{budgetError.message}</Text>
+                </View>
+              )}
+            </View>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
-
-      <BottomBar navigation={navigation} />
-    </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f0f4f8', // Light grey background
+    backgroundColor: '#F8FAFC',
   },
-  centerScreen: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Theme from HomeScreen
-  headerBackground: {
-    backgroundColor: '#4299e1', // Primary Blue
-    borderBottomLeftRadius: 30, // Large radius
-    borderBottomRightRadius: 30, // Large radius
+  header: {
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
     paddingBottom: 20,
-    paddingHorizontal: 15, // Added padding from reference
-    elevation: 4, 
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
   },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 5,
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 10 : 0,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 16,
   },
   backButton: {
-    padding: 10,
-    marginRight: 10,
+    padding: 8,
+  },
+  headerTitleContainer: {
+    flex: 1,
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#fff',
+    color: '#FFFFFF',
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  headerIconButton: {
+    padding: 8,
   },
   scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 15,
+    paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 100,
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 15,
-    padding: 20,
-    marginBottom: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-  },
-  // --- NEW STYLES FOR PROMPT ---
   promptCard: {
-    backgroundColor: '#fee2e2', // Light Red/Pink background
-    borderColor: '#e53e3e', // Error Red border
-    borderWidth: 2,
-    borderRadius: 15,
-    padding: 20,
     marginBottom: 20,
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  promptGradient: {
+    padding: 24,
     alignItems: 'center',
   },
+  promptIconContainer: {
+    marginBottom: 12,
+  },
   promptTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#e53e3e',
-    marginTop: 5,
-    marginBottom: 5,
+    color: '#92400E',
+    marginBottom: 8,
   },
   promptText: {
     fontSize: 14,
-    color: '#c53030', // Darker Red text
+    color: '#78350F',
     textAlign: 'center',
-    marginBottom: 15,
+    lineHeight: 20,
+    marginBottom: 16,
   },
   promptButton: {
-    backgroundColor: '#e53e3e',
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    backgroundColor: '#F59E0B',
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 12,
   },
   promptButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
   },
-  // --- END NEW STYLES ---
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
-    textAlign: 'center',
+  incomeCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  incomeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  incomeLabel: {
+    fontSize: 15,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+  },
+  editButtonText: {
+    fontSize: 13,
+    color: '#3B82F6',
+    fontWeight: '600',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 10,
   },
   currencySymbol: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
-    marginRight: 5,
+    color: '#1E293B',
+    marginRight: 8,
   },
   incomeInput: {
-    fontSize: 32,
+    fontSize: 40,
     fontWeight: 'bold',
-    color: '#333',
+    color: '#1E293B',
+    textAlign: 'center',
+    minWidth: 180,
     borderBottomWidth: 2,
-    borderColor: '#4299e1', // Match header theme color
-    paddingVertical: 5,
-    minWidth: 150,
+    borderBottomColor: '#3B82F6',
+    paddingVertical: 4,
+  },
+  incomeDisplay: {
+    fontSize: 40,
+    fontWeight: 'bold',
+    color: '#1E293B',
     textAlign: 'center',
   },
-  placeholderText: {
-    fontSize: 16,
-    color: '#888',
-    textAlign: 'center',
-    fontStyle: 'italic',
-    paddingVertical: 20,
+  inputActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
   },
-  budgetItem: {
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 15,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  applyButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#3B82F6',
+    alignItems: 'center',
+  },
+  applyButtonDisabled: {
+    backgroundColor: '#CBD5E1',
+  },
+  applyButtonText: {
+    fontSize: 15,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  ruleCard: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  ruleHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    gap: 10,
+    marginBottom: 12,
   },
-  budgetItemIcon: {
-    marginRight: 15,
-  },
-  budgetItemTitle: {
+  ruleTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 2,
+    color: '#1E40AF',
   },
-  budgetItemDescription: {
-    fontSize: 12,
-    color: '#eee',
-    flexShrink: 1,
+  ruleDescription: {
+    fontSize: 14,
+    color: '#1E40AF',
+    lineHeight: 20,
   },
-  budgetItemAmount: {
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  emptyStateTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#475569',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateText: {
+    fontSize: 14,
+    color: '#94A3B8',
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    lineHeight: 20,
+  },
+  breakdownContainer: {
+    marginBottom: 20,
+  },
+  breakdownTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
-    marginLeft: 'auto',
+    color: '#1E293B',
+    marginBottom: 16,
   },
-  needsBackground: {
-    backgroundColor: '#48bb78', // Green
+  categoryCard: {
+    marginBottom: 16,
+    borderRadius: 24,
+    overflow: 'hidden',
   },
-  wantsBackground: {
-    backgroundColor: '#f6ad55', // Orange
+  categoryGradient: {
+    padding: 20,
   },
-  savingsBackground: {
-    backgroundColor: '#63b3ed', // Blue
+  categoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
   },
-  saveButton: {
-    backgroundColor: '#4299e1', // Theme color for action button
-    padding: 15,
-    borderRadius: 10,
-    marginTop: 20,
+  categoryIconWrapper: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  categoryInfo: {
+    flex: 1,
+  },
+  categoryTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 4,
+  },
+  categoryDescription: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.9)',
+  },
+  categoryBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  categoryPercentage: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  categoryAmount: {
+    fontSize: 36,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 12,
+  },
+  progressBarContainer: {
+    height: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 4,
+  },
+  examplesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  exampleTag: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  exampleText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  summaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    marginTop: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  saveButtonText: {
-    color: '#fff',
-    fontSize: 18,
+  summaryLabel: {
+    fontSize: 16,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  summaryAmount: {
+    fontSize: 24,
     fontWeight: 'bold',
+    color: '#1E293B',
   },
-  saveButtonSuccess: {
-    backgroundColor: '#48bb78', // Success Green
+  summaryDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 16,
   },
-  saveButtonError: {
-    backgroundColor: '#e53e3e', // Error Red
+  summaryBreakdown: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
-  saveButtonDisabled: {
-    backgroundColor: '#a0aec0', // Gray for disabled
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  saveErrorText: {
-    color: '#e53e3e',
-    textAlign: 'center',
-    marginTop: 5,
-  }
+  summaryDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  summaryItemText: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  successMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#D1FAE5',
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  successText: {
+    fontSize: 14,
+    color: '#065F46',
+    fontWeight: '500',
+  },
+  errorMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FEE2E2',
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#991B1B',
+    fontWeight: '500',
+  },
 });
 
 export default BudgetScreen;

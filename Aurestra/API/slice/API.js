@@ -1,8 +1,7 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
-
+import { API_BASE_URL } from "../../API_URL"
 // NOTE: You must replace this placeholder URL with your actual Flask server IP/domain.
-const API_BASE_URL = 'https://01df9cf68733.ngrok-free.app';
 
 // =======================================================
 // BUDGET ASYNC THUNKS (NEW)
@@ -37,7 +36,7 @@ export const fetchBudget = createAsyncThunk(
 
 /**
  * Saves or updates the monthly budget via POST /api/budget.
- * @param {number} income - The total income/budget amount (PKR).
+ * @param {object} budgetData - The budget object containing income, needs, wants, and saving.
  */
 export const saveBudget = createAsyncThunk(
   'api/saveBudget',
@@ -47,7 +46,8 @@ export const saveBudget = createAsyncThunk(
     try {
       // Validate the main income value from the object
       if (typeof budgetData.income !== 'number' || budgetData.income <= 0) {
-        alert(budgetData.income);
+        // Changed alert() to console.error() as alert() is forbidden in this environment.
+        console.error('Validation Error: Income must be a positive number.', budgetData.income); 
         return rejectWithValue('Income must be a positive number.');
       }
       
@@ -150,11 +150,64 @@ export const fetchFourMonthHistory = createAsyncThunk(
   }
 );
 
+// =======================================================
+// TRANSACTIONS ASYNC THUNKS (NEW)
+// =======================================================
+
+/**
+ * Fetch the top 4 latest transactions.
+ */
+export const fetchLatestTransactions = createAsyncThunk(
+  'api/fetchLatestTransactions',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/latest-transactions`);
+      return response.data; // Array of 4 transactions
+    } catch (error) {
+      const message = error?.response?.data?.message || error.message;
+      console.error('fetchLatestTransactions error:', message);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Fetch the top 4 spending categories for the latest month.
+ */
+export const fetchTopSpendingCategories = createAsyncThunk(
+  'api/fetchTopSpendingCategories',
+  async (_, { rejectWithValue }) => {
+    const url = `${API_BASE_URL}/api/transactions/top-categories`; // Construct URL
+    try {
+      const response = await axios.get(url); // Use constructed URL
+      // response.data is now: { month: "YYYY-MM", top_categories: [...] }
+      return response.data; 
+    } catch (error) {
+      const message = error?.response?.data?.message || error.message;
+      // 💡 Enhanced log to show the exact URL that failed
+      console.error(`fetchTopSpendingCategories failed (404 likely):`, {
+        url: url,
+        error: message, 
+        response: error.response?.data
+      });
+      return rejectWithValue(message);
+    }
+  }
+);
+
 // Initial state
 const initialState = {
   summaries: [],
   status: 'idle', // General status for fetching/calculating summaries
   error: null,    // Error for summaries or structured success notification
+// New state fields
+latestTransactions: [],   // Array of top 4 latest transactions
+transactionsStatus: 'idle',
+transactionsError: null,
+
+topCategories: null,      // Object: { month, top_categories }
+topCategoriesStatus: 'idle',
+topCategoriesError: null,
 
   // New state for Budget feature
   budget: null,           // Holds the fetched budget amount ({ month, total_budget, created_at })
@@ -262,7 +315,36 @@ const APISlice = createSlice({
         state.historyStatus = 'failed';
         state.historyError = action.payload;
         state.fourMonthHistory = [];
-      });
+      })
+  
+  // --- fetchLatestTransactions ---
+  .addCase(fetchLatestTransactions.pending, (state) => {
+    state.transactionsStatus = 'loading';
+    state.transactionsError = null;
+  })
+  .addCase(fetchLatestTransactions.fulfilled, (state, action) => {
+    state.transactionsStatus = 'succeeded';
+    state.latestTransactions = action.payload; // array of 4 transactions
+  })
+  .addCase(fetchLatestTransactions.rejected, (state, action) => {
+    state.transactionsStatus = 'failed';
+    state.transactionsError = action.payload;
+  })
+
+  // --- fetchTopSpendingCategories ---
+  .addCase(fetchTopSpendingCategories.pending, (state) => {
+    state.topCategoriesStatus = 'loading';
+    state.topCategoriesError = null;
+  })
+  .addCase(fetchTopSpendingCategories.fulfilled, (state, action) => {
+    state.topCategoriesStatus = 'succeeded';
+    state.topCategories = action.payload; // { month, top_categories }
+  })
+  .addCase(fetchTopSpendingCategories.rejected, (state, action) => {
+    state.topCategoriesStatus = 'failed';
+    state.topCategoriesError = action.payload;
+  });
+
   },
 });
 
