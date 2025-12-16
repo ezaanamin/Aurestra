@@ -217,6 +217,7 @@ def parse_easypaisa_email(body):
     Parse Easypaisa email body into structured transaction data
     """
     lines = [clean(l) for l in body.split("\n") if clean(l)]
+    print(lines)
     data = {}
 
     # Transaction ID
@@ -323,11 +324,11 @@ def fetch_and_save_easypaisa_emails():
             tx_data = parse_easypaisa_email(body_text)
 
             # Prevent duplicates
-            # tx_id = tx_data.get("transaction_id")
-            # if tx_id:
-            #     existing = Transaction.query.filter_by(transaction_id=tx_id).first()
-            #     if existing:
-            #         continue
+            tx_id = tx_data.get("transaction_id")
+            if tx_id:
+                existing = Transaction.query.filter_by(transaction_id=tx_id).first()
+                if existing:
+                    continue
 
             # Fallback date
             dt = tx_data.get("date") or datetime.utcnow()

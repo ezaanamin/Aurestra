@@ -42,11 +42,8 @@ class Transaction(db.Model):
     __tablename__ = "transactions"
 
     id = db.Column(db.Integer, primary_key=True)
-
     
     source = db.Column(db.String(20), nullable=False)
-
-    
     date = db.Column(db.DateTime, nullable=False)
 
     # Category (prints, gym, food, research paper etc.)
@@ -67,7 +64,11 @@ class Transaction(db.Model):
     # Optional extra details (store name, bank name etc.)
     notes = db.Column(db.String(255), nullable=True)
 
+    # NEW — type: credit or debit
+    type = db.Column(db.String(10), nullable=False)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
     def __repr__(self):
         return f"<Transaction {self.source} | {self.amount} | {self.date} | {self.sender} → {self.receiver}>"

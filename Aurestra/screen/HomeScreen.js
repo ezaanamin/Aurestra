@@ -8,7 +8,7 @@ import {
   SafeAreaView,
   StatusBar,
   Dimensions,
-  ActivityIndicator, // Added for loading states
+  ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -18,16 +18,12 @@ import {
 } from "../API/slice/API"
 import { useDispatch, useSelector } from 'react-redux';
 const { width } = Dimensions.get('window');
-
-// --- STATIC DATA MAP (Needed for icons, colors, and budget limits) ---
 const CATEGORY_DETAILS_MAP = {
-  // Added mappings for the categories received from your API response
   "Food & Snacks": { icon: 'food', color: '#FF6B6B', total_budget: 15000 },
   "Ride / Transport": { icon: 'car', color: '#4ECDC4', total_budget: 10000 },
   "Subscription (Google one )": { icon: 'credit-card-settings-outline', color: '#A78BFA', total_budget: 500 },
   "Miscellaneous": { icon: 'cash', color: '#3B82F6', total_budget: 3000 },
   Income: { icon: 'bank-transfer-in', color: '#10B981', total_budget: 0 },
-  // Fallback details for categories not listed above
   Other: { icon: 'cash', color: '#64748B', total_budget: 5000 },
 };
 
@@ -97,6 +93,8 @@ const HomeScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
+
+        
       <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
       
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -125,7 +123,7 @@ const HomeScreen = ({ navigation }) => {
               <TouchableOpacity onPress={() => setBalanceVisible(!balanceVisible)}>
                 <Icon 
                   name={balanceVisible ? 'eye-off' : 'eye'} 
-                  size={22} 
+f                  size={22} 
                   color="#CBD5E1" 
                 />
               </TouchableOpacity>
