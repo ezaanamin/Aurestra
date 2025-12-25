@@ -91,3 +91,36 @@ class Budget(db.Model):
 
     def __repr__(self):
         return f"<Budget {self.month} | Total: {self.total_budget} | Savings (Total): {self.saving}>"
+
+
+class AccountBalance(db.Model):
+    """
+    Stores current balances for each account/wallet.
+    Updated whenever transactions are processed.
+    """
+    __tablename__ = "account_balances"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Account source (matches Transaction.source)
+    source = db.Column(db.String(50), nullable=False, unique=True)  # e.g., "bank", "jazzcash", "easypaisa"
+    
+    # Current balance
+    current_balance = db.Column(db.Float, nullable=False, default=0.0)
+    
+    # Last update timestamp
+    last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<AccountBalance {self.source} | Balance: {self.current_balance:.2f}>"
+    
+    def to_dict(self):
+        """Convert to dictionary for API responses"""
+        return {
+            "id": self.id,
+            "source": self.source,
+            "balance": self.current_balance,
+            "last_updated": self.last_updated.isoformat() if self.last_updated else None
+        }
+
+
