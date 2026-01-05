@@ -1,1 +1,6 @@
 backend/ezaanamin-7cbcf-firebase-adminsdk-xz65x-4b0ce45261.json
+backend/setup_db.sh
+reproduce_issue.py
+reproduce_merger.py
+backend/check_env.py
+backend/fix_db_access.sh

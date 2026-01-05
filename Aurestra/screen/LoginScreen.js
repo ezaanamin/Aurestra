@@ -15,15 +15,95 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
+import { useDispatch, useSelector } from 'react-redux';
+
+import { loginUser, verifyOtp, registerDeviceToken } from '../API/slice/API';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Modal } from 'react-native';
+import CustomAlert from '../components/CustomAlert';
 
 const LoginScreen = ({ navigation }) => {
+  const dispatch = useDispatch();
+  const { authStatus, authError, token } = useSelector((state) => state.API);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+
+  // OTP State
+  const [otpVisible, setOtpVisible] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [timer, setTimer] = useState(300); // 5 minutes in seconds
+
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+
+  // Custom Alert State
+  const [alertConfig, setAlertConfig] = useState({
+    visible: false,
+    type: 'error',
+    title: '',
+    message: '',
+  });
+
+  const showAlert = (type, title, message) => {
+    setAlertConfig({ visible: true, type, title, message });
+  };
+
+  const hideAlert = () => {
+    setAlertConfig((prev) => ({ ...prev, visible: false }));
+  };
+
+  // Timer Logic
+  React.useEffect(() => {
+    let interval;
+    if (otpVisible && timer > 0) {
+      interval = setInterval(() => {
+        setTimer((prev) => prev - 1);
+      }, 1000);
+    } else if (!otpVisible) {
+      setTimer(300); // Reset when closed
+      setOtp(''); // Clear OTP when closed
+    }
+    return () => clearInterval(interval);
+  }, [otpVisible, timer]);
+
+  const formatTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  React.useEffect(() => {
+    if (token) {
+      // Proactively register token on login so it links to user
+      registerTokenIfAvailable();
+      navigation.replace('MainTabs');
+    }
+  }, [token, navigation]);
+
+  const registerTokenIfAvailable = async () => {
+    try {
+      const pToken = await AsyncStorage.getItem('pushToken');
+      if (pToken) {
+        dispatch(registerDeviceToken(pToken));
+      }
+    } catch (e) {
+      console.error('Login register token fail:', e);
+    }
+  };
+
+  React.useEffect(() => {
+    if (authStatus === 'otp_sent') {
+      setOtpVisible(true);
+      // Removed Alert.alert, Modal handles it
+    }
+    if (authStatus === 'failed' && authError) {
+      showAlert('error', 'Authentication Failed', authError);
+    }
+  }, [authStatus, authError]);
 
   // Email validation
   const validateEmail = (email) => {
@@ -33,11 +113,8 @@ const LoginScreen = ({ navigation }) => {
 
   // Handle Login
   const handleLogin = () => {
-    // Reset errors
     setEmailError('');
     setPasswordError('');
-
-    // Validation
     let hasError = false;
 
     if (!email) {
@@ -51,47 +128,39 @@ const LoginScreen = ({ navigation }) => {
     if (!password) {
       setPasswordError('Password is required');
       hasError = true;
-    } else if (password.length < 6) {
-      setPasswordError('Password must be at least 6 characters');
-      hasError = true;
     }
 
     if (hasError) return;
 
-    // Simulate login API call
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      
-      // Mock successful login
-      if (email === 'demo@example.com' && password === 'password') {
-        Alert.alert('Success', 'Login successful!', [
-          { text: 'OK', onPress: () => navigation.replace('Home') }
-        ]);
-      } else {
-        Alert.alert('Error', 'Invalid email or password');
-      }
-    }, 1500);
+    dispatch(loginUser({ email, password }));
+  };
+
+  const handleVerifyOtp = () => {
+    if (!otp || otp.length < 6) {
+      setOtpError('Enter a valid 6-digit OTP');
+      return;
+    }
+    dispatch(verifyOtp({ email, otp }));
   };
 
   // Social Login Handlers
   const handleGoogleLogin = () => {
-    Alert.alert('Google Login', 'Google authentication would be implemented here');
+    showAlert('info', 'Google Login', 'Google authentication would be implemented here');
   };
 
   const handleAppleLogin = () => {
-    Alert.alert('Apple Login', 'Apple authentication would be implemented here');
+    showAlert('info', 'Apple Login', 'Apple authentication would be implemented here');
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
-      
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView 
+        <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
@@ -104,8 +173,8 @@ const LoginScreen = ({ navigation }) => {
               <View style={styles.logoCircle}>
                 <Icon name="wallet" size={40} color="#FFFFFF" />
               </View>
-              <Text style={styles.appName}>FinanceTracker</Text>
-              <Text style={styles.appTagline}>Smart Money Management</Text>
+              <Text style={styles.appName}>Aurestra</Text>
+              <Text style={styles.appTagline}>Personal Finance Evolved</Text>
             </View>
           </LinearGradient>
 
@@ -190,16 +259,16 @@ const LoginScreen = ({ navigation }) => {
             <TouchableOpacity
               style={styles.loginButton}
               onPress={handleLogin}
-              disabled={isLoading}
+              disabled={authStatus === 'loading'}
             >
               <LinearGradient
                 colors={['#3B82F6', '#2563EB']}
                 style={styles.loginGradient}
               >
-                {isLoading ? (
+                {authStatus === 'loading' ? (
                   <View style={styles.loadingContainer}>
                     <Icon name="loading" size={20} color="#FFFFFF" />
-                    <Text style={styles.loginButtonText}>Signing in...</Text>
+                    <Text style={styles.loginButtonText}>Processing...</Text>
                   </View>
                 ) : (
                   <Text style={styles.loginButtonText}>Sign In</Text>
@@ -224,22 +293,62 @@ const LoginScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
-            {/* Sign Up Link */}
-            <View style={styles.signUpContainer}>
-              <Text style={styles.signUpText}>Don't have an account? </Text>
-              <TouchableOpacity onPress={() => navigation.navigate('SignUp')}>
-                <Text style={styles.signUpLink}>Sign Up</Text>
-              </TouchableOpacity>
-            </View>
 
-            {/* Demo Credentials */}
-            <View style={styles.demoContainer}>
-              <Icon name="information-outline" size={16} color="#64748B" />
-              <Text style={styles.demoText}>Demo: demo@example.com / password</Text>
-            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* OTP Modal */}
+      <Modal visible={otpVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Enter OTP</Text>
+            <Text style={styles.modalSubtitle}>Please enter the 6-digit code sent to {email}</Text>
+
+            <TextInput
+              style={styles.otpInput}
+              placeholder="000000"
+              keyboardType="number-pad"
+              maxLength={6}
+              value={otp}
+              onChangeText={setOtp}
+              textAlign="center"
+            />
+            {otpError ? <Text style={styles.errorText}>{otpError}</Text> : null}
+
+            <View style={styles.timerContainer}>
+              <Icon name="clock-outline" size={16} color={timer < 60 ? '#EF4444' : '#64748B'} />
+              <Text style={[styles.timerText, timer < 60 && styles.timerTextWarning]}>
+                Code expires in {formatTime(timer)}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.verifyButton, timer === 0 && styles.verifyButtonDisabled]}
+              onPress={handleVerifyOtp}
+              disabled={timer === 0}
+            >
+              {authStatus === 'loading' ? (
+                <Text style={styles.verifyButtonText}>Verifying...</Text>
+              ) : (
+                <Text style={styles.verifyButtonText}>Verify & Login</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => setOtpVisible(false)} style={styles.cancelButton}>
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <CustomAlert
+        visible={alertConfig.visible}
+        type={alertConfig.type}
+        title={alertConfig.title}
+        message={alertConfig.message}
+        onClose={hideAlert}
+      />
     </SafeAreaView>
   );
 };
@@ -314,12 +423,12 @@ export const ForgotPasswordScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
-      
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView 
+        <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
@@ -697,6 +806,80 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontWeight: '600',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '85%',
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1E293B',
+    marginBottom: 8,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  otpInput: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    borderBottomWidth: 2,
+    borderBottomColor: '#3B82F6',
+    width: '60%',
+    marginBottom: 20,
+    paddingVertical: 10,
+    color: '#1E293B',
+    letterSpacing: 8,
+  },
+  verifyButton: {
+    width: '100%',
+    backgroundColor: '#3B82F6',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  verifyButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  verifyButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  timerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 20,
+  },
+  timerText: {
+    fontSize: 14,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  timerTextWarning: {
+    color: '#EF4444',
+    fontWeight: 'bold',
+  },
+  cancelButton: {
+    padding: 10,
+  },
+  cancelButtonText: {
+    color: '#64748B',
+    fontWeight: '500',
+  }
 });
 
 export default LoginScreen;

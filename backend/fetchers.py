@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from email.header import decode_header
 import fitz  # PyMuPDF
 from utils import decode_mime_words, extract_text_from_pdf
-from balances import extract_balances_from_bank, extract_balances_from_wallet
+from balances import extract_balances_from_bank, extract_balances_from_wallet, extract_transactions_from_bank
 from config import *
 from PIL import Image
 import re
@@ -31,14 +31,17 @@ def clean(text):
 # -------------------------
 def get_search_date():
     """
-    Returns the correct date string for email search.
-    - If today is the 1st, return the last day of the previous month
-    - Otherwise, return yesterday.
-    Format: 31-May-2025
+    Returns the search date string for email query.
+    We look back 30 days to ensure we catch the latest monthly statement
+    even if the user opens the app mid-month.
+    Format: 01-Jan-2025
     """
+    # Look back to the 1st of the previous month
     today = datetime.today()
-    prev_day = today.replace(day=1) - timedelta(days=1) if today.day == 1 else today - timedelta(days=1)
-    return prev_day.strftime("%d-%b-%Y")
+    first_of_this_month = today.replace(day=1)
+    prev_month = first_of_this_month - timedelta(days=1)
+    first_of_prev_month = prev_month.replace(day=1)
+    return first_of_prev_month.strftime("%d-%b-%Y")
 
 def safe_float(val):
     try:
@@ -54,31 +57,7 @@ def decode_mime_words(s):
         for t in decoded
     )
 
-def extract_text_from_pdf(file_path):
-    """
-    Extracts all text from a PDF.
-    - Tries normal text extraction (PyMuPDF)
-    - Falls back to OCR if the page has no text (image-based PDFs)
-    """
-    full_text = ""
-    try:
-        with fitz.open(file_path) as doc:
-            for page_number, page in enumerate(doc, start=1):
-                text = page.get_text("text").strip()
 
-                # If page is image-based (no text), run OCR
-                if not text:
-                    pix = page.get_pixmap(dpi=300)
-                    img = Image.open(io.BytesIO(pix.tobytes("png")))
-                    ocr_text = pytesseract.image_to_string(img)
-                    text = ocr_text.strip()
-
-                full_text += f"\n\n--- Page {page_number} ---\n{text}"
-
-    except Exception as e:
-        print(f"[ERROR] Failed to extract text from PDF: {e}")
-
-    return full_text.strip()
 
 # -------------------------
 # FETCH LATEST BANK EMAIL
@@ -86,6 +65,7 @@ def extract_text_from_pdf(file_path):
 def fetch_latest_bank_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
+        print(f"📧 Connecting to IMAP as: {BANK_EMAIL_ACCOUNT}")
         mail.login(BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD)
         mail.select("inbox")
 
@@ -96,33 +76,101 @@ def fetch_latest_bank_email():
             mail.logout()
             return {"error": "Bank statement not available."}
 
-        latest_id = data[0].split()[-1]
-        status, msg_data = mail.fetch(latest_id, "(RFC822)")
-        msg = email.message_from_bytes(msg_data[0][1])
+        if status != "OK" or not data[0]:
+            mail.logout()
+            return {"error": "Bank statement not available."}
 
-        subject = decode_mime_words(msg.get("Subject", ""))
-        result = {"from": BANK_SENDER, "subject": subject, "balances": {}}
+        # Get list of email IDs (latest are at the end)
+        email_ids = data[0].split()
+        # Scan the last 3 emails to find the best account (e.g. Current instead of Digital)
+        # because the bank might send multiple emails for different accounts.
+        recent_ids = email_ids[-3:] if len(email_ids) > 3 else email_ids
+        
+        best_result = None
+        max_balance = -1.0
 
-        # Extract PDF
-        if msg.is_multipart():
-            for part in msg.walk():
-                filename = part.get_filename()
-                if filename and filename.lower().endswith(".pdf"):
-                    path = os.path.join(ATTACHMENTS_DIR, "bank_statement.pdf")
-                    with open(path, "wb") as f:
-                        f.write(part.get_payload(decode=True))
-                    text = extract_text_from_pdf(path)
-                    os.remove(path)
-                    if text:
-                        result["balances"] = extract_balances_from_bank(text)
-                        break
+        for e_id in reversed(recent_ids):
+            print(f"📧 processing email ID: {e_id}")
+            try:
+                status, msg_data = mail.fetch(e_id, "(RFC822)")
+                if status != "OK": continue
+                
+                msg = email.message_from_bytes(msg_data[0][1])
+                subject = decode_mime_words(msg.get("Subject", ""))
+                current_result = {"from": BANK_SENDER, "subject": subject, "balances": {}}
+                
+                # Extract PDF
+                extracted_text = None
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        filename = part.get_filename()
+                        if filename and filename.lower().endswith(".pdf"):
+                            path = os.path.join(ATTACHMENTS_DIR, f"stm_{e_id}.pdf")
+                            with open(path, "wb") as f:
+                                f.write(part.get_payload(decode=True))
+                            
+                            # Extract Text
+                            extracted_text = extract_text_from_pdf(path, BANK_PDF_PASSWORD)
+                            os.remove(path)
+                            if extracted_text:
+                                break # Found a PDF in this email
+
+                if extracted_text:
+                    # CHECK FOR BLOCKED/TARGET ACCOUNTS
+                    if IGNORE_ACCOUNT_NUMBER and IGNORE_ACCOUNT_NUMBER in extracted_text:
+                        print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                        continue
+                        
+                    is_target = False
+                    if TARGET_ACCOUNT_NUMBER and TARGET_ACCOUNT_NUMBER in extracted_text:
+                         print(f"🎯 Target Account {TARGET_ACCOUNT_NUMBER} FOUND!")
+                         is_target = True
+                         print(f"📄 TARGET PDF CONTENT:\n{extracted_text[:4000]}...")
+
+                    balances = extract_balances_from_bank(extracted_text)
+                    current_result["balances"] = balances
+                    
+                    # Extract Transactions
+                    transactions = extract_transactions_from_bank(extracted_text)
+                    current_result["transactions"] = transactions
+                    print(f"📝 Extracted {len(transactions)} transactions from {subject}")
+                    
+                    found_bal = safe_float(balances.get("closing_balance", "0"))
+                    print(f"💰 Found Balance: {found_bal} in {subject}")
+
+                    # OVERRIDE: Use the calculated closing balance from the last transaction
+                    # This ensures consistency with our fixed parsing logic.
+                    if transactions:
+                        calculated_closing = transactions[-1]["running_balance"]
+                        print(f"🔄 Correcting Closing Balance: {found_bal} -> {calculated_closing}")
+                        balances["closing_balance"] = str(calculated_closing)
+                        found_bal = calculated_closing
+                    
+                    # If this is our TARGET account, select it immediately and stop scanning
+                    if is_target:
+                         max_balance = found_bal
+                         best_result = current_result
+                         break
+                    
+                    # Otherwise, keep looking for highest balance (fallback)
+                    if found_bal > max_balance:
+                        max_balance = found_bal
+                        best_result = current_result
+                        
+            except Exception as inner_e:
+                print(f"⚠️ Error processing email {e_id}: {inner_e}")
+                continue
 
         mail.logout()
 
-        if not result["balances"]:
-            return {"error": "Bank statement PDF found but unable to extract balances."}
+        if not best_result or not best_result["balances"]:
+             if max_balance == -1.0:
+                 return {"error": "Bank statements found but unable to extract valid balances."}
+             # If we processed emails but found 0.0, best_result is set (initially implicitly? No, need to handle empty)
+             return {"error": "No valid PDF balances found."}
 
-        return result
+        print(f"🏆 Selected Statement with Balance: {max_balance}")
+        return best_result
 
     except Exception as e:
         return {"error": f"Bank email fetch error: {str(e)}"}
@@ -133,7 +181,7 @@ def fetch_latest_bank_email():
 def fetch_latest_wallet_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        mail.login(WALLET_EMAIL_ACCOUNT, WALLET_APP_PASSWORD)
+        mail.login(BANK_EMAIL_ACCOUNT, WALLET_APP_PASSWORD)
         mail.select("inbox")
 
         search_date = get_search_date()
@@ -290,7 +338,7 @@ def fetch_and_save_easypaisa_emails():
     """
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        mail.login(WALLET_EMAIL_ACCOUNT, WALLET_APP_PASSWORD)
+        mail.login(BANK_EMAIL_ACCOUNT, APP_PASSWORD)
         mail.select("inbox")
 
         status, data = mail.search(None, '(UNSEEN FROM "amin.ezaan@gmail.com")')
@@ -333,16 +381,26 @@ def fetch_and_save_easypaisa_emails():
             # Fallback date
             dt = tx_data.get("date") or datetime.utcnow()
 
+            # Determine Type
+            sender = tx_data.get("sender", "")
+            receiver = tx_data.get("receiver", "")
+            tx_type = "debit" # Default
+            if "Ezaan Amin" in receiver or "AZAN AMIN" in receiver.upper():
+                tx_type = "credit"
+            elif "Ezaan Amin" in sender or "AZAN AMIN" in sender.upper():
+                tx_type = "debit"
+
             # Save transaction
             new_tx = Transaction(
                 source="wallet",
                 date=dt,
                 purpose=tx_data.get("category") or tx_data.get("purpose"),
                 amount=float(tx_data.get("amount", 0)),
-                sender=tx_data.get("sender"),
-                receiver=tx_data.get("receiver"),
+                sender=sender,
+                receiver=receiver,
                 transaction_id=tx_id,
-                notes=tx_data.get("notes") or tx_data.get("receiver_detail")
+                notes=tx_data.get("notes") or tx_data.get("receiver_detail"),
+                type=tx_type
             )
 
             db.session.add(new_tx)
@@ -352,6 +410,14 @@ def fetch_and_save_easypaisa_emails():
         mail.logout()
 
         print(f"✅ Saved {len(transactions_saved)} Easypaisa transactions")
+        
+        # Serialize dates for JSON response
+        for tx in transactions_saved:
+            if "date" in tx and isinstance(tx["date"], (datetime, date)):
+                tx["date"] = tx["date"].isoformat()
+            if "time" in tx and isinstance(tx["time"], (time, datetime)):
+                tx["time"] = tx["time"].strftime("%H:%M:%S")
+
         return {"saved": transactions_saved, "count": len(transactions_saved)}
 
     except Exception as e:
@@ -364,21 +430,28 @@ def fetch_and_save_easypaisa_emails():
 # -------------------------
 def calculate_combined_summary():
     bank_data = fetch_latest_bank_email()
-    wallet_data = fetch_latest_wallet_email()
+    # wallet_data = fetch_latest_wallet_email() # Disabled as per user request
 
-    if "error" in bank_data or "error" in wallet_data:
-        missing = []
-        if "error" in bank_data: missing.append("Bank")
-        if "error" in wallet_data: missing.append("Wallet")
-        return {"error": f"{', '.join(missing)} statement not available. Unable to calculate summary."}
+    opening = 0.0
+    closing = 0.0
+    warnings = []
 
-    opening = safe_float(bank_data["balances"].get("opening_balance")) + safe_float(wallet_data["balances"].get("opening_balance"))
-    closing = safe_float(bank_data["balances"].get("closing_balance")) + safe_float(wallet_data["balances"].get("closing_balance"))
+    # Process Bank Data
+    if "error" not in bank_data and "balances" in bank_data:
+        opening += safe_float(bank_data["balances"].get("opening_balance"))
+        closing += safe_float(bank_data["balances"].get("closing_balance"))
+    else:
+        return {"error": bank_data.get("error", "Bank statement not available.")}
+
+    # Only Bank Data used
     net_change = closing - opening
-
-    return {
+    
+    result = {
         "total_opening_balance": opening,
         "total_closing_balance": closing,
         "total_expense": abs(net_change) if net_change < 0 else 0.0,
+        "total_income": 0.0, 
         "total_savings": net_change if net_change > 0 else 0.0,
     }
+        
+    return result

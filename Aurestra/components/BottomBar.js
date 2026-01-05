@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Text } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const BottomBar = ({ navigation }) => {
   const state = navigation?.getState();
@@ -9,6 +10,8 @@ const BottomBar = ({ navigation }) => {
 
   const isScreenActive = (screenName) =>
     activeRouteName === screenName;
+
+  const { t } = useSettings();
 
   return (
     <View style={styles.bottomNav}>
@@ -34,7 +37,7 @@ const BottomBar = ({ navigation }) => {
             isScreenActive('Home') && styles.navLabelActive,
           ]}
         >
-          Home
+          {t('home')}
         </Text>
       </TouchableOpacity>
 
@@ -60,7 +63,7 @@ const BottomBar = ({ navigation }) => {
             isScreenActive('Budget') && styles.navLabelActive,
           ]}
         >
-          Budget
+          {t('budget')}
         </Text>
       </TouchableOpacity>
 
@@ -86,7 +89,7 @@ const BottomBar = ({ navigation }) => {
             isScreenActive('Transaction') && styles.navLabelActive,
           ]}
         >
-          Transactions
+          {t('transactions')}
         </Text>
       </TouchableOpacity>
 
@@ -112,7 +115,7 @@ const BottomBar = ({ navigation }) => {
             isScreenActive('Saving') && styles.navLabelActive,
           ]}
         >
-          Savings
+          {t('savings')}
         </Text>
       </TouchableOpacity>
 
@@ -138,7 +141,7 @@ const BottomBar = ({ navigation }) => {
             isScreenActive('Profile') && styles.navLabelActive,
           ]}
         >
-          Profile
+          {t('profile')}
         </Text>
       </TouchableOpacity>
     </View>

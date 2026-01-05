@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchBudget, saveBudget } from '../API/slice/API';
+import { useSettings } from '../context/SettingsContext';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -73,10 +74,12 @@ const BudgetScreen = ({ navigation }) => {
     }
   }, [budgetStatus, budget, budgetError]);
 
+  const { currency } = useSettings();
+
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-PK', {
       style: 'currency',
-      currency: 'PKR',
+      currency: currency,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
@@ -167,7 +170,7 @@ const BudgetScreen = ({ navigation }) => {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView 
+        <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
@@ -280,8 +283,8 @@ const BudgetScreen = ({ navigation }) => {
               <Text style={styles.breakdownTitle}>Your Budget Breakdown</Text>
 
               {budgetCategories.map((category, index) => {
-                const percentageOfTotal = currentDisplayTotal > 0 
-                  ? (category.amount / currentDisplayTotal) * 100 
+                const percentageOfTotal = currentDisplayTotal > 0
+                  ? (category.amount / currentDisplayTotal) * 100
                   : 0;
 
                 return (

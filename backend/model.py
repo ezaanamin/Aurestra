@@ -69,6 +69,21 @@ class Transaction(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "source": self.source,
+            "date": self.date.isoformat(),
+            "purpose": self.purpose,
+            "amount": self.amount,
+            "sender": self.sender,
+            "receiver": self.receiver,
+            "transaction_id": self.transaction_id,
+            "notes": self.notes,
+            "type": self.type,
+            "created_at": self.created_at.isoformat()
+        }
+
 
     def __repr__(self):
         return f"<Transaction {self.source} | {self.amount} | {self.date} | {self.sender} → {self.receiver}>"
@@ -114,6 +129,7 @@ class AccountBalance(db.Model):
     def __repr__(self):
         return f"<AccountBalance {self.source} | Balance: {self.current_balance:.2f}>"
     
+    
     def to_dict(self):
         """Convert to dictionary for API responses"""
         return {
@@ -124,3 +140,113 @@ class AccountBalance(db.Model):
         }
 
 
+class SavingsGoal(db.Model):
+    """
+    Stores user savings goals (e.g., 'New Laptop', 'Emergency Fund').
+    """
+    __tablename__ = "savings_goals"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    target_amount = db.Column(db.Float, nullable=False)
+    current_amount = db.Column(db.Float, default=0.0)
+    emoji = db.Column(db.String(20), default="💰")
+    deadline = db.Column(db.Date, nullable=True)
+    
+    # Calculate remaining amount dynamically
+    @property
+    def remaining(self):
+        return max(self.target_amount - self.current_amount, 0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "target_amount": self.target_amount,
+            "current_amount": self.current_amount,
+            "emoji": self.emoji,
+            "deadline": self.deadline.isoformat() if self.deadline else None,
+            "remaining": self.remaining
+        }
+
+class Category(db.Model):
+    """
+    Stores transaction categories.
+    """
+    __tablename__ = "categories"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
+    icon = db.Column(db.String(50), nullable=False, default="cash")
+    color = db.Column(db.String(20), nullable=False, default="#64748B")
+    cat_type = db.Column(db.String(20), nullable=False, default="spending") # 'spending', 'income', 'both'
+    is_default = db.Column(db.Boolean, default=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "icon": self.icon,
+            "color": self.color,
+            "cat_type": self.cat_type,
+            "is_default": self.is_default
+        }
+
+
+class User(db.Model):
+    """
+    Stores user authentication and profile details.
+    """
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False) # Storing 'PIN' as hash for now (or plain if simple)
+    full_name = db.Column(db.String(100), nullable=True)
+    
+    # OTP Fields
+    otp_code = db.Column(db.String(6), nullable=True)
+    otp_expiry = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # New Avatar URL
+    avatar_url = db.Column(db.String(512), nullable=True)
+    
+    # Notifications Preference
+    notifications_enabled = db.Column(db.Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "full_name": self.full_name,
+            "avatar_url": self.avatar_url,
+            "notifications_enabled": self.notifications_enabled
+        }
+
+
+
+class DeviceToken(db.Model):
+    """
+    Stores Expo push notification tokens for devices.
+    """
+    __tablename__ = "device_tokens"
+
+    id = db.Column(db.Integer, primary_key=True)
+    token = db.Column(db.String(255), nullable=False, unique=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "token": self.token,
+            "user_id": self.user_id,
+            "created_at": self.created_at.isoformat(),
+            "last_seen": self.last_seen.isoformat()
+        }

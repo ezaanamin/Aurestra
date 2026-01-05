@@ -29,6 +29,12 @@ class BankAlhabibSMSParser:
         re.IGNORECASE
     )
     
+    # Simpler version for variations
+    CREDIT_PATTERN_SIMPLE = re.compile(
+        r'credited with (?:Rs\.|PKR)\s*([0-9,]+\.?\d*)\s+from\s+([^,\s]+)',
+        re.IGNORECASE
+    )
+    
     DEBIT_PATTERN = re.compile(
         r'debited by PKR\s*([0-9,]+\.?\d*)\s+(?:excluding FED\s+)?(?:for\s+(.+?)(?:\.|For|$))',
         re.IGNORECASE
@@ -78,39 +84,51 @@ class BankAlhabibSMSParser:
     def parse_credit_transaction(cls, message):
         """
         Parse credit (incoming) transaction
-        
-        Examples:
-        - "credited with Rs. 5600.00 via Raast from Ezaan Amin SADAPKKA..."
-        - "credited with Rs. 39000.00 via IBFT from INERTIA, 147236-147236"
         """
+        # Try complex pattern first
         match = cls.CREDIT_PATTERN.search(message)
-        if not match:
-            return None
+        if match:
+            amount = cls.parse_amount(match.group(1))
+            payment_method = match.group(2)
+            sender_name = match.group(3).strip()
+            reference = match.group(4).strip() if match.group(4) else None
+            date_str = match.group(5)
+            time_str = match.group(6)
+            
+            transaction_date = cls.parse_datetime(date_str, time_str)
+            account_number = cls.extract_account_number(message)
+            
+            purpose = f"{payment_method} Transfer"
+            if reference:
+                purpose += f" - {reference}"
+            
+            return {
+                'type': 'credit',
+                'amount': amount,
+                'sender': sender_name,
+                'purpose': 'Uncategorized', # Changed from Income to allow manual categorization
+                'date': transaction_date,
+                'notes': f"Payment method: {payment_method}, Account: {account_number}, Ref: {reference}",
+                'source': 'sms',
+            }
+
+        # Try simple pattern
+        match = cls.CREDIT_PATTERN_SIMPLE.search(message)
+        if match:
+            amount = cls.parse_amount(match.group(1))
+            sender_name = match.group(2).strip()
+            
+            return {
+                'type': 'credit',
+                'amount': amount,
+                'sender': sender_name,
+                'purpose': 'Uncategorized', # Changed from Income to allow manual categorization
+                'date': datetime.utcnow(),
+                'notes': f"Source: {sender_name}",
+                'source': 'sms',
+            }
         
-        amount = cls.parse_amount(match.group(1))
-        payment_method = match.group(2)  # Raast, IBFT, etc.
-        sender_name = match.group(3).strip()
-        reference = match.group(4).strip() if match.group(4) else None
-        date_str = match.group(5)
-        time_str = match.group(6)
-        
-        transaction_date = cls.parse_datetime(date_str, time_str)
-        account_number = cls.extract_account_number(message)
-        
-        # Extract purpose from sender name and reference
-        purpose = f"{payment_method} Transfer"
-        if reference:
-            purpose += f" - {reference}"
-        
-        return {
-            'type': 'credit',
-            'amount': amount,
-            'sender': sender_name,
-            'purpose': purpose,
-            'date': transaction_date,
-            'notes': f"Payment method: {payment_method}, Account: {account_number}",
-            'source': 'sms',
-        }
+        return None
     
     @classmethod
     def parse_debit_transaction(cls, message):
@@ -134,9 +152,9 @@ class BankAlhabibSMSParser:
             return {
                 'type': 'debit',
                 'amount': amount,
-                'receiver': 'Bank AL Habib',
-                'purpose': purpose,
-                'date': datetime.utcnow(),  # SMS doesn't include date for charges
+                'receiver': purpose, # Merchant name extracted from SMS
+                'purpose': 'Uncategorized', # Force user categorization in app
+                'date': datetime.utcnow(),
                 'notes': f"Card ending: {card_last_digits}, Account: {account_number}",
                 'source': 'sms',
             }
@@ -153,9 +171,9 @@ class BankAlhabibSMSParser:
                 'type': 'debit',
                 'amount': amount,
                 'receiver': 'Bank AL Habib',
-                'purpose': purpose,
+                'purpose': 'Uncategorized',
                 'date': datetime.utcnow(),
-                'notes': f"Service Charge, Account: {account_number}",
+                'notes': f"{purpose}, Account: {account_number}",
                 'source': 'sms',
             }
         
@@ -170,8 +188,8 @@ class BankAlhabibSMSParser:
             return {
                 'type': 'debit',
                 'amount': amount,
-                'receiver': 'Bank AL Habib',
-                'purpose': purpose,
+                'receiver': purpose,
+                'purpose': 'Uncategorized',
                 'date': datetime.utcnow(),
                 'notes': f"Account: {account_number}",
                 'source': 'sms',
@@ -270,6 +288,19 @@ def process_bank_sms(message, sender='BAHL'):
         # Create new transaction
         transaction = Transaction(**transaction_data)
         db.session.add(transaction)
+        
+        # Update Account Balance
+        from model import AccountBalance
+        balance = AccountBalance.query.filter_by(source='sms').first()
+        if not balance:
+            balance = AccountBalance(source='sms', current_balance=0.0)
+            db.session.add(balance)
+            
+        if transaction.type == 'credit':
+            balance.current_balance += transaction.amount
+        else:
+            balance.current_balance -= transaction.amount
+            
         db.session.commit()
         
         logger.info(f"SMS transaction created: {transaction.id} - {transaction.type} Rs. {transaction.amount}")
