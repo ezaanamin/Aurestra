@@ -76,10 +76,6 @@ def fetch_latest_bank_email():
             mail.logout()
             return {"error": "Bank statement not available."}
 
-        if status != "OK" or not data[0]:
-            mail.logout()
-            return {"error": "Bank statement not available."}
-
         # Get list of email IDs (latest are at the end)
         email_ids = data[0].split()
         # Scan the last 3 emails to find the best account (e.g. Current instead of Digital)
@@ -97,7 +93,23 @@ def fetch_latest_bank_email():
                 
                 msg = email.message_from_bytes(msg_data[0][1])
                 subject = decode_mime_words(msg.get("Subject", ""))
-                current_result = {"from": BANK_SENDER, "subject": subject, "balances": {}}
+                
+                # Parse Date
+                date_str = msg.get("Date")
+                statement_date = datetime.utcnow() # Fallback
+                try:
+                    statement_date = email.utils.parsedate_to_datetime(date_str)
+                    if statement_date.tzinfo is not None:
+                        statement_date = statement_date.replace(tzinfo=None)
+                except:
+                    pass
+
+                current_result = {
+                    "from": BANK_SENDER, 
+                    "subject": subject, 
+                    "balances": {}, 
+                    "date": statement_date # Include Date
+                }
                 
                 # Extract PDF
                 extracted_text = None
@@ -138,13 +150,13 @@ def fetch_latest_bank_email():
                     found_bal = safe_float(balances.get("closing_balance", "0"))
                     print(f"💰 Found Balance: {found_bal} in {subject}")
 
-                    # OVERRIDE: Use the calculated closing balance from the last transaction
-                    # This ensures consistency with our fixed parsing logic.
-                    if transactions:
-                        calculated_closing = transactions[-1]["running_balance"]
-                        print(f"🔄 Correcting Closing Balance: {found_bal} -> {calculated_closing}")
-                        balances["closing_balance"] = str(calculated_closing)
-                        found_bal = calculated_closing
+                    # REMOVED: Don't override PDF balance with calculated balance
+                    # The PDF balance from the bank is the source of truth
+                    # if transactions:
+                    #     calculated_closing = transactions[-1]["running_balance"]
+                    #     print(f"🔄 Correcting Closing Balance: {found_bal} -> {calculated_closing}")
+                    #     balances["closing_balance"] = str(calculated_closing)
+                    #     found_bal = calculated_closing
                     
                     # If this is our TARGET account, select it immediately and stop scanning
                     if is_target:
@@ -434,8 +446,7 @@ def calculate_combined_summary():
 
     opening = 0.0
     closing = 0.0
-    warnings = []
-
+    
     # Process Bank Data
     if "error" not in bank_data and "balances" in bank_data:
         opening += safe_float(bank_data["balances"].get("opening_balance"))
@@ -455,3 +466,136 @@ def calculate_combined_summary():
     }
         
     return result
+
+
+# -------------------------
+# FETCH SPECIFIC MONTH STATEMENT
+# -------------------------
+def fetch_previous_month_statement(reference_date=None):
+    """
+    Fetches the bank statement for the month PREVIOUS to reference_date.
+    If reference_date is None, uses today (so fetches previous month from now).
+    
+    Args:
+        reference_date (datetime): The 'current' date to look back from.
+                                   To fetch Nov 2025, pass a date in Dec 2025 (e.g. Dec 10).
+    """
+    try:
+        mail = imaplib.IMAP4_SSL(IMAP_HOST)
+        print(f"📧 Connecting to IMAP as: {BANK_EMAIL_ACCOUNT}")
+        mail.login(BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD)
+        mail.select("inbox")
+
+        # Calculate Date Range for Previous Month
+        today = reference_date if reference_date else datetime.today()
+        first = today.replace(day=1)
+        last_month = first - timedelta(days=1)
+        
+        # SEARCH LOGIC UPDATE: Broad SINCE, then Python Filter
+        # This fixes 404s caused by strict/unsupported 'BEFORE' IMAP queries.
+        
+        # Search from start of PREVIOUS month (Nov 1) to be safe
+        broad_since = last_month.replace(day=1).strftime("%d-%b-%Y")
+        
+        # Exact Target Window: e.g. Nov 25 to Dec 25
+        limit_start_date = last_month.replace(day=25)
+        limit_end_date = today.replace(day=1) + timedelta(days=25)
+        
+        print(f"🔍 IMAP Broad Search: SINCE {broad_since}")
+        status, data = mail.search(None, f'FROM "{BANK_SENDER}" SINCE "{broad_since}"')
+
+        if status != "OK" or not data[0]:
+            mail.logout()
+            print(f"⚠️ No emails found since {broad_since}")
+            return {"error": f"No bank emails found since {broad_since}"}
+
+        email_ids = data[0].split()
+        print(f"📨 Found {len(email_ids)} candidate emails. Filtering for [{limit_start_date.date()} - {limit_end_date.date()}]...")
+        
+        # We will iterate reversed to get latest valid one first
+        candidates = reversed(email_ids)
+        
+        best_result = None
+        
+        for e_id in candidates:
+            try:
+                # 1. HEADER FETCH & FILTER
+                # ------------------------
+                _, head_data = mail.fetch(e_id, '(BODY.PEEK[HEADER])')
+                msg_head = email.message_from_bytes(head_data[0][1])
+                
+                # Check Date STRICTLY
+                date_str = msg_head.get("Date")
+                if not date_str: continue
+                
+                try:
+                    email_dt = email.utils.parsedate_to_datetime(date_str)
+                    if email_dt.tzinfo is not None:
+                        email_dt = email_dt.replace(tzinfo=None)
+                        
+                    # Filter Logic
+                    if not (limit_start_date <= email_dt <= limit_end_date):
+                         continue
+                except:
+                    continue
+                
+                # Check Subject
+                subj = decode_mime_words(msg_head.get("Subject", ""))
+                if "statement" not in subj.lower():
+                    continue
+
+                print(f"✅ Found Valid Email! Date: {email_dt.date()} | Subject: {subj}")
+                
+                # 2. BODY FETCH & PROCESS
+                # ------------------------
+                status, msg_data = mail.fetch(e_id, "(RFC822)")
+                if status != "OK": continue
+                
+                msg = email.message_from_bytes(msg_data[0][1])
+                subject = subj
+                
+                # Check Attachment
+                extracted_text = None
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        filename = part.get_filename()
+                        if filename and filename.lower().endswith(".pdf"):
+                            path = os.path.join(ATTACHMENTS_DIR, f"stm_{e_id}.pdf")
+                            with open(path, "wb") as f:
+                                f.write(part.get_payload(decode=True))
+                            
+                            extracted_text = extract_text_from_pdf(path, BANK_PDF_PASSWORD)
+                            if os.path.exists(path):
+                                os.remove(path)
+                            if extracted_text:
+                                break 
+
+                if extracted_text:
+                    if IGNORE_ACCOUNT_NUMBER and IGNORE_ACCOUNT_NUMBER in extracted_text:
+                        print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                        continue
+                    
+                    balances = extract_balances_from_bank(extracted_text)
+                    transactions = extract_transactions_from_bank(extracted_text)
+                    
+                    best_result = {
+                        "balances": balances,
+                        "transactions": transactions,
+                        "month_name": last_month.strftime("%B %Y"),
+                        "raw_count": len(transactions)
+                    }
+                    break # Found valid PDF! Stop searching.
+            
+            except Exception as inner:
+                print(f"Error reading email {e_id}: {inner}")
+                continue
+        
+        mail.logout()
+        
+        if not best_result:
+            return {"error": "Could not find a valid PDF statement for previous month."}
+            
+        return best_result
+
+    except Exception as e:
+        return {"error": f"IMAP Error: {str(e)}"}

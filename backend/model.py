@@ -60,14 +60,24 @@ class Transaction(db.Model):
 
     # NEW — unique easypaisa transaction ID for duplicate protection
     transaction_id = db.Column(db.String(50), unique=True, nullable=True)
+    
+    # NEW — robust hash for deduplication
+    transaction_hash = db.Column(db.String(64), unique=True, nullable=True)
 
     # Optional extra details (store name, bank name etc.)
     notes = db.Column(db.String(255), nullable=True)
 
     # NEW — type: credit or debit
     type = db.Column(db.String(10), nullable=False)
+    
+    # NEW — Categorization tracking
+    categorization_status = db.Column(db.String(20), default='pending')  # 'pending', 'categorized', 'auto', 'manual'
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)  # Proper FK relationship
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationship to Category (will be defined after Category model)
+    # category = db.relationship('Category', backref='transactions')
 
     def to_dict(self):
         return {
@@ -81,6 +91,8 @@ class Transaction(db.Model):
             "transaction_id": self.transaction_id,
             "notes": self.notes,
             "type": self.type,
+            "categorization_status": self.categorization_status,
+            "category_id": self.category_id,
             "created_at": self.created_at.isoformat()
         }
 
@@ -125,6 +137,9 @@ class AccountBalance(db.Model):
     
     # Last update timestamp
     last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # NEW: Manual override flag
+    is_manual = db.Column(db.Boolean, default=False)
     
     def __repr__(self):
         return f"<AccountBalance {self.source} | Balance: {self.current_balance:.2f}>"
@@ -196,6 +211,41 @@ class Category(db.Model):
         }
 
 
+class CategorizationRule(db.Model):
+    """
+    Stores user-defined rules for automatic categorization.
+    Example: 'Netflix' always goes to 'Entertainment'
+    """
+    __tablename__ = "categorization_rules"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
+    # Pattern matching (case-insensitive)
+    merchant_pattern = db.Column(db.String(255), nullable=False)
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    hit_count = db.Column(db.Integer, default=0)  # Track how many times rule was applied
+    
+    # Relationships
+    category = db.relationship('Category')
+    user = db.relationship('User', backref='categorization_rules')
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "merchant_pattern": self.merchant_pattern,
+            "category": self.category.to_dict() if self.category else None,
+            "hit_count": self.hit_count,
+            "created_at": self.created_at.isoformat()
+        }
+
+    def __repr__(self):
+        return f"<CategorizationRule '{self.merchant_pattern}' -> {self.category.name if self.category else 'None'}>"
+
+
 class User(db.Model):
     """
     Stores user authentication and profile details.
@@ -206,6 +256,11 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False) # Storing 'PIN' as hash for now (or plain if simple)
     full_name = db.Column(db.String(100), nullable=True)
+    
+    # Google Auth Fields
+    google_id = db.Column(db.String(50), nullable=True)
+    google_email = db.Column(db.String(120), nullable=True)
+    google_refresh_token = db.Column(db.String(255), nullable=True)
     
     # OTP Fields
     otp_code = db.Column(db.String(6), nullable=True)
@@ -249,4 +304,122 @@ class DeviceToken(db.Model):
             "user_id": self.user_id,
             "created_at": self.created_at.isoformat(),
             "last_seen": self.last_seen.isoformat()
+        }
+
+
+class FinancialInsight(db.Model):
+    """
+    Stores high-signal financial knowledge and monthly summaries.
+    Long-term memory (RAG) format.
+    """
+    __tablename__ = "financial_insights"
+
+    id = db.Column(db.Integer, primary_key=True)
+    month = db.Column(db.String(7), nullable=False) # "YYYY-MM"
+    
+    # Natural Language Content (The 'Story')
+    content = db.Column(db.Text, nullable=False)
+    
+    # Structured Metrics (for graphing/analysis later)
+    # Stored as JSON string or use db.JSON if supported by all envs (SQLite supports json in recent versions, but Text is safest)
+    metrics_json = db.Column(db.Text, nullable=True) 
+    
+    # Retrieval Tags (e.g., "savings_trend", "high_expenses")
+    tags = db.Column(db.String(255), nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        import json
+        metrics = {}
+        if self.metrics_json:
+            try:
+                metrics = json.loads(self.metrics_json)
+            except:
+                metrics = {}
+                
+        return {
+            "id": self.id,
+            "month": self.month,
+            "content": self.content,
+            "metrics": metrics,
+            "tags": self.tags,
+            "created_at": self.created_at.isoformat()
+        }
+
+class StatementAnalysis(db.Model):
+    """
+    Stores the exact calculations for E-Statement Analysis.
+    This is what populates the E-Statement Modal in Transaction History.
+    Populated by 'calculate_statement'.
+    """
+    __tablename__ = "statement_analysis"
+
+    id = db.Column(db.Integer, primary_key=True)
+    month = db.Column(db.String(7), nullable=False, unique=True)  # "YYYY-MM"
+    
+    opening_balance = db.Column(db.Float, default=0.0)
+    closing_balance = db.Column(db.Float, default=0.0)
+    
+    total_income = db.Column(db.Float, default=0.0)
+    total_expense = db.Column(db.Float, default=0.0)
+    net_result = db.Column(db.Float, default=0.0)
+    
+    status = db.Column(db.String(20)) # "Surplus", "Deficit"
+    
+    # Store JSON string for breakdown: {"income": {...}, "expenses": {...}}
+    breakdown_json = db.Column(db.Text, nullable=True)
+    
+    analysis_date = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # NEW: Balance application tracking
+    balance_applied = db.Column(db.Boolean, default=False)  # Track if balance was applied to AccountBalance
+    reviewed_at = db.Column(db.DateTime, nullable=True)  # Timestamp of first review
+    statement_id = db.Column(db.String(64), nullable=True)  # Unique identifier (can be month or hash)
+    
+    # NEW: Linking transactions
+    transaction_ids = db.Column(db.Text, nullable=True) # JSON list of transaction IDs
+    
+    # NEW: Processing status tracking
+    processing_status = db.Column(db.String(20), default='success')  # 'success', 'partial', 'failed'
+    processing_notes = db.Column(db.Text, nullable=True)  # Details about any parsing issues
+
+    def to_dict(self):
+        import json
+        breakdown = {}
+        if self.breakdown_json:
+            try:
+                breakdown = json.loads(self.breakdown_json)
+            except:
+                pass
+        
+        # Get current account balance for comparison
+        from model import AccountBalance
+        account_balance_record = AccountBalance.query.order_by(AccountBalance.last_updated.desc()).first()
+        current_account_balance = account_balance_record.current_balance if account_balance_record else 0.0
+        
+        # Check if closing balance matches account balance
+        balance_matches = abs(self.closing_balance - current_account_balance) < 0.01  # Allow small floating point difference
+                
+        return {
+            "target_month": self.month,
+            "opening_balance": self.opening_balance,
+            "closing_balance": self.closing_balance,
+            "account_balance": current_account_balance,  # NEW: Current account balance
+            "balance_matches": balance_matches,  # NEW: True if closing matches account
+            "summary": {
+                "income": self.total_income,
+                "expenses": self.total_expense,
+                "net": self.net_result,
+                "status": self.status
+            },
+            "breakdown": breakdown,
+            "analyzed_at": self.analysis_date.isoformat(),
+            "balance_applied": self.balance_applied,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "statement_id": self.statement_id,
+            "transaction_ids": json.loads(self.transaction_ids) if self.transaction_ids else [],
+            "processing_status": self.processing_status,  # NEW
+            "processing_notes": self.processing_notes,  # NEW
+            "read_status": "read" if self.reviewed_at else "unread"  # NEW: Show if statement has been viewed
         }

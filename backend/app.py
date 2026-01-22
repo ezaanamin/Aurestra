@@ -4,7 +4,9 @@ from database import app, db  # Import app from database.py
 from model import MonthlyBalance, Transaction, Budget, AccountBalance, SavingsGoal, Category
 from datetime import datetime, date, timedelta
 import os
+import json
 from dateutil.relativedelta import relativedelta
+import re
 from werkzeug.utils import secure_filename
 from time import time
 from fetchers import (
@@ -13,6 +15,7 @@ from fetchers import (
     fetch_and_save_easypaisa_emails,
     calculate_combined_summary
 )
+from drive_utils import get_drive_service, ensure_folder_path, upload_json
 from fcm_utils import send_push_to_all
 from sqlalchemy import func
 from sqlalchemy import desc
@@ -27,19 +30,23 @@ from email.mime.multipart import MIMEMultipart
 import random
 from functools import wraps
 from model import User
+from google.oauth2 import id_token
+from google.auth.transport import requests
+from google_auth_oauthlib.flow import Flow
 
 # Config is already loaded in database.py
 
 
 
 # JWT Secret
-app.config['SECRET_KEY'] = 'super_secret_jwt_key_ezaan_123'  # Change in production
+# JWT Secret
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or 'default_dev_secret_change_me'
 
 # Email Config (Gmail)
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 # Ideally these should be env vars
-SMTP_EMAIL = "ezaan.amin@gmail.com" 
+SMTP_EMAIL = os.getenv('SMTP_EMAIL') 
 # NOTE: User needs to provide App Password in .env or we assume it is the Wallet email
 SMTP_PASSWORD = os.getenv("WALLET_APP_PASSWORD") or os.getenv("wallet_APP_PASSWORD") or os.getenv("APP_PASSWORD") or os.getenv("OPTP_APP_PASSWORD") 
 
@@ -69,6 +76,10 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     
     return decorated
+
+def generate_otp():
+    """Generates a secure 6-digit OTP."""
+    return ''.join([str(secrets.randbelow(10)) for _ in range(6)])
 
 def send_otp_email(to_email, otp_code):
     try:
@@ -150,104 +161,89 @@ def save_monthly_summary(month, total_open, total_close):
 # REPORTS ROUTES
 # -------------------------
 @app.route("/api/reports/statement", methods=["POST"])
-def get_statement_report():
+@token_required
+def get_statement_report(current_user):
+    from model import StatementAnalysis # Fix NameError
     data = request.get_json() or {}
     
     # Input: month "YYYY-MM" (e.g. "2026-01")
-    # If provided, we want the PREVIOUS month ("2025-12").
-    # If NOT provided, we assume "today" is the input, so we want previous month relative to today.
-    
     input_month_str = data.get("month")
     
-    try:
-        if input_month_str:
-            input_date = datetime.strptime(input_month_str, "%Y-%m")
-        else:
-            input_date = datetime.now()
+    if not input_month_str:
+        # Default to current month if not provided, or handle as "Latest"
+        input_month_str = datetime.now().strftime("%Y-%m")
+        
+    target_month_str = input_month_str
+    
+    # 1. Try fetching from E-Statement Analysis Table (The new Source of Truth)
+    analysis = StatementAnalysis.query.filter_by(month=target_month_str).first()
+    
+    if analysis:
+        # print(f"✅ Found Analysis for {target_month_str} in DB")
+        
+        # 2. Fetch linked transactions for the table
+        try:
+            stmt_tx_ids = json.loads(analysis.transaction_ids) if analysis.transaction_ids else []
+            from model import Transaction
+            linked_txs = Transaction.query.filter(Transaction.id.in_(stmt_tx_ids)).order_by(Transaction.date.desc()).all()
+        except:
+            linked_txs = []
             
-        # Calculate target month (Previous Month)
-        # First day of input month
-        first_of_input = input_date.replace(day=1)
-        # Last day of previous month
-        last_of_prev = first_of_input - timedelta(days=1)
-        # First day of previous month
-        first_of_prev = last_of_prev.replace(day=1)
-        
-        target_month_str = first_of_prev.strftime("%Y-%m")
-        target_year = first_of_prev.year
-        target_month = first_of_prev.month
-        
-    except ValueError:
-        return jsonify({"error": "Invalid month format. Use YYYY-MM"}), 400
+        tx_data = []
+        for t in linked_txs:
+            tx_data.append({
+                "date": t.date.strftime("%d/%m/%Y"),
+                "amount": t.amount,
+                "description": t.notes or t.sender or "Transaction",
+                "type": t.type,
+                "status": "existing"
+            })
+            
+        response_data = analysis.to_dict()
+        response_data["data"] = tx_data  # Populate 'data' field for the frontend table
 
-    with app.app_context():
-        # 1. Fetch Summary for Target Month
-        summary = MonthlyBalance.query.filter_by(month=target_month_str).first()
+        # RESTORED: Backup to Drive (Encrypted)
+        if current_user.google_refresh_token:
+            try:
+                service = get_drive_service(current_user)
+                if service:
+                    # Ensure "Aurestra Finance/{Month}"
+                    folder_id = ensure_folder_path(service, ["Aurestra Finance", target_month_str])
+                    if folder_id:
+                        upload_json(service, folder_id, "statement.json", response_data)
+            except Exception as e:
+                print(f"⚠️ Drive Backup Failed: {e}")
         
-        opening_bal = 0.0
-        closing_bal = 0.0
+        return jsonify(response_data)
         
-        if summary:
-            opening_bal = summary.opening_balance
-            closing_bal = summary.closing_balance
-        else:
-            # Try to auto-calculate if missing?
-            # Or just return 0s
-            pass
-            
-        # 2. Fetch Transactions for Target Month
-        transactions = Transaction.query.filter(
-            extract('year', Transaction.date) == target_year,
-            extract('month', Transaction.date) == target_month
-        ).order_by(Transaction.date.desc()).all()
-        
-        # 3. Calculate Income vs Expense
-        total_income = 0.0
-        total_expense = 0.0
-        
-        income_breakdown = {}
-        expense_breakdown = {}
-        
-        tx_list = []
-        
-        for tx in transactions:
-            amount = tx.amount
-            category = tx.purpose or "Uncategorized"
-            
-            if tx.type == 'credit':
-                total_income += amount
-                income_breakdown[category] = income_breakdown.get(category, 0) + amount
-            elif tx.type == 'debit':
-                total_expense += amount
-                expense_breakdown[category] = expense_breakdown.get(category, 0) + amount
-                
-            tx_list.append(tx.to_dict())
-            
-        # 4. Determine Surplus / Deficit
-        surplus = total_income - total_expense
-        status = "Surplus" if surplus >= 0 else "Deficit"
-        
+    # print(f"⚠️ No Analysis found for {target_month_str} in DB.")
+    
+    # Check if user is asking for the *current* month
+    # We can't have a final statement for the current running month.
+    now_str = datetime.now().strftime("%Y-%m")
+    
+    if target_month_str == now_str:
         return jsonify({
-            "target_month": target_month_str,
-            "opening_balance": opening_bal,
-            "closing_balance": closing_bal,
-            "summary": {
-                "income": total_income,
-                "expenses": total_expense,
-                "net": surplus,
-                "status": status
-            },
-            "breakdown": {
-                "income": income_breakdown,
-                "expenses": expense_breakdown
-            },
-            "transactions": tx_list
-        })
+            "message": f"Statement for {target_month_str} is not finalized yet. Please wait for the month to end."
+        }), 404
+    else:
+        return jsonify({
+            "message": f"Analysis for {target_month_str} isn't computed. Please go to Home and click 'Calculate'."
+        }), 404
+        
+    # ---------------------------------------------------------
+    # ---------------------------------------------------------
+
 
 
 # -------------------------
 # BASIC ROUTES
 # -------------------------
+
+@app.route("/test")
+def test_route():
+    return jsonify({"status": "ok", "message": "Backend is deployed and running"}), 200
+
 @app.route("/")
 def home():
     return "Backend Running ✅"
@@ -268,10 +264,10 @@ def login():
         db.session.add(user)
         db.session.commit()
     else:
-        # DEBUG LOGS
-        print(f"DEBUG LOGIN: Request for {email}")
-        print(f"DEBUG LOGIN: Input Pass: '{password}'")
-        print(f"DEBUG LOGIN: Stored Pass: '{user.password_hash}'")
+        # DEBUG LOGS (Removed for deployment)
+        # print(f"DEBUG LOGIN: Request for {email}")
+        # print(f"DEBUG LOGIN: Input Pass: '{password}'")
+        # print(f"DEBUG LOGIN: Stored Pass: '{user.password_hash}'")
 
         if user.password_hash != password:
              return jsonify({'message': 'Invalid credentials'}), 401
@@ -293,6 +289,130 @@ def login():
         # Fallback: Log OTP to console and allow login flow (Soft Fail)
         print(f"⚠️ [AUTH] Email sending failed. DEBUG OTP for {email}: {otp}")
         return jsonify({'message': 'OTP sent (Check Console/Dev)', 'otp_required': True}), 200
+
+@app.route("/api/google/login", methods=["POST"])
+def google_login():
+    data = request.get_json()
+    id_token_str = data.get('idToken')
+    server_auth_code = data.get('serverAuthCode')
+    
+    if not id_token_str:
+        return jsonify({'message': 'Missing ID token'}), 400
+
+    try:
+        # Verify ID Token
+        id_info = id_token.verify_oauth2_token(
+            id_token_str, 
+            requests.Request(), 
+            os.getenv('GOOGLE_WEB_CLIENT_ID')
+        )
+
+        email = id_info.get('email')
+        google_id = id_info.get('sub')
+        name = id_info.get('name')
+        picture = id_info.get('picture') # Get Google Avatar
+        
+        # Check if user exists
+        user = User.query.filter_by(email=email).first()
+        
+        if not user:
+            # Create new user
+            user = User(
+                email=email,
+                full_name=name,
+                password_hash="GOOGLE_AUTH", # Placeholder
+                google_id=google_id,
+                google_email=email,
+                avatar_url=picture # Save Avatar
+            )
+            db.session.add(user)
+            db.session.commit()
+        else:
+            # Update existing user
+            if not user.google_id:
+                user.google_id = google_id
+                user.google_email = email
+            
+            # Always update avatar if available and different?
+            # Or just if missing? Let's override to keep it fresh from Google.
+            if picture:
+                user.avatar_url = picture
+                
+            # Update name if missing
+            if name and not user.full_name:
+                user.full_name = name
+                
+            db.session.commit()
+            
+        # Handle Server Auth Code (Get Refresh Token)
+        if server_auth_code:
+            try:
+                # Exchange auth code for credentials
+                client_id = os.getenv('GOOGLE_WEB_CLIENT_ID')
+                client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+                
+                print(f"DEBUG: Client ID Prefix: {client_id[:5] if client_id else 'None'}...")
+                print(f"DEBUG: Client Secret Prefix: {client_secret[:3] if client_secret else 'None'}...")
+                
+                client_config = {
+                    "web": {
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                }
+                
+                flow = Flow.from_client_config(
+                    client_config,
+                    scopes=[
+                        'https://www.googleapis.com/auth/drive.file',
+                        'openid',
+                        'https://www.googleapis.com/auth/userinfo.email',
+                        'https://www.googleapis.com/auth/userinfo.profile'
+                    ],
+                    redirect_uri=''
+                )
+                
+                flow.fetch_token(code=server_auth_code)
+                credentials = flow.credentials
+                
+                if credentials.refresh_token:
+                    user.google_refresh_token = credentials.refresh_token
+                    db.session.commit()
+                    print(f"✅ [AUTH] Saved Refresh Token for {email}")
+                
+            except Exception as e:
+                print(f"❌ [AUTH] Failed to exchange auth code: {str(e)}")
+                # Should we fail the login? Maybe not, but Drive backup won't work.
+
+        # Generate OTP for 2FA
+        otp = generate_otp()
+        from datetime import timezone
+        expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
+        
+        user.otp_code = otp
+        user.otp_expiry = expiry
+        db.session.commit()
+        
+        # Send OTP (Soft Fail)
+        try:
+            send_otp_email(user.email, otp)
+        except Exception as e:
+            print(f"⚠️ [AUTH] Email sending failed: {e}")
+            # Proceed anyway, developer can check DB or logs for OTP
+        
+        return jsonify({
+            'message': 'Please verify OTP',
+            'otp_required': True,
+            'email': email
+        }), 200
+
+    except ValueError as e:
+        return jsonify({'message': f'Invalid token: {str(e)}'}), 401
+    except Exception as e:
+        print(f"Google Login Error: {e}")
+        return jsonify({'message': 'Internal server error'}), 500
 
 @app.route("/api/verify-otp", methods=["POST"])
 def verify_otp():
@@ -361,7 +481,8 @@ def profile(current_user):
 
 
 @app.route("/api/bank/latest")
-def bank_latest():
+@token_required
+def bank_latest(current_user):
     data = fetch_latest_bank_email()
     return jsonify(data)
 
@@ -401,25 +522,80 @@ def upload_avatar(current_user):
         return jsonify({'message': 'File uploaded', 'avatar_url': avatar_url}), 200
 
 @app.route("/api/wallet/latest")
-def wallet_latest():
+@token_required
+def wallet_latest(current_user):
     data = fetch_latest_wallet_email()
     return jsonify(data)
 
+
+@app.route("/api/accounts/set_balance", methods=["POST"])
+@token_required
+def set_manual_balance(current_user):
+    """
+    Manually set the account balance.
+    This sets is_manual=True, preventing older statements from overwriting it.
+    """
+    try:
+        data = request.get_json()
+        amount = float(data.get('amount', 0))
+        source = data.get('source', 'bank')
+        
+        balance = AccountBalance.query.filter_by(source=source).first()
+        if not balance:
+            balance = AccountBalance(source=source, current_balance=amount)
+            db.session.add(balance)
+        
+        # Update Balance and set Manual Flag
+        balance.current_balance = amount
+        balance.is_manual = True
+        balance.last_updated = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Balance updated manually",
+            "account": balance.to_dict()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/accounts", methods=["GET"])
-def get_accounts():
+@token_required
+def get_accounts(current_user):
     with app.app_context():
         # 1. Start with fresh statement balance if possible
         try:
             bank_data = fetch_latest_bank_email()
             if "balances" in bank_data:
                 closing_bal = bank_data["balances"].get("closing_balance", 0.0)
+                email_date = bank_data.get("date") # Assuming fetch_latest_bank_email returns a datetime object
+                
                 bank_acc = AccountBalance.query.filter_by(source="bank").first()
                 if bank_acc:
-                    bank_acc.current_balance = closing_bal
-                    bank_acc.last_updated = datetime.utcnow()
+                    # CHECK MANUAL OVERRIDE & TIMESTAMP Logic
+                    should_update = True
                     
-                    # SAVE TRANSACTIONS
+                    if bank_acc.is_manual:
+                        # LOCKED: Do not update if manual
+                        should_update = False
+                    
+                    # Also check TIMESTAMP: Only update if email is NEWER than last_updated
+                    # This prevents stale transaction emails from overwriting fresh statement data
+                    if email_date and bank_acc.last_updated:
+                        if email_date <= bank_acc.last_updated:
+                            print(f"⏭️  Stale email balance ({email_date}) ignored. Current balance is newer ({bank_acc.last_updated})")
+                            should_update = False
+                    
+                    if should_update:
+                        print(f"🔄 Updating Account Balance from Email: {closing_bal}")
+                        bank_acc.current_balance = closing_bal
+                        bank_acc.last_updated = datetime.utcnow()
+                    
+                    # SAVE TRANSACTIONS (Always process transactions, just don't overwrite balance if manual)
                     extracted_txs = bank_data.get("transactions", [])
+                    new_tx_count = 0
                     for tx in extracted_txs:
                         try:
                             tx_date = datetime.strptime(tx["date"], "%d/%m/%Y")
@@ -432,6 +608,7 @@ def get_accounts():
                             Transaction.type == tx["type"]
                         ).first()
                         
+
                         if not exists:
                             new_tx = Transaction(
                                 source="bank",
@@ -444,7 +621,17 @@ def get_accounts():
                                 notes=tx["description"][:250]
                             )
                             db.session.add(new_tx)
+                            new_tx_count += 1
                     
+                    if new_tx_count > 0:
+                        try:
+                             send_push_to_all(
+                                 title="New Bank Transactions",
+                                 body=f"Found {new_tx_count} new transaction(s) from your bank statement."
+                             )
+                        except Exception as e:
+                             print(f"⚠️ Push failed in get_accounts: {e}")
+
                     db.session.commit()
         except:
             pass
@@ -452,11 +639,10 @@ def get_accounts():
         # 2. Fetch all accounts
         accounts = AccountBalance.query.all()
         
-        # 3. Calculate Total Savings Allocation (only ACTIVE ones)
-        total_allocated = db.session.query(func.sum(SavingsGoal.current_amount))\
-            .filter(SavingsGoal.current_amount < SavingsGoal.target_amount).scalar() or 0.0
-
-        # 4. Calculate LIVE Balance (Statement + Recent SMS Adjustments)
+        # 3. Calculate LIVE Balance (Statement + Recent SMS Adjustments)
+        # Note: Savings are now Transaction-based, so we simply return the current_balance
+        # which already has savings deducted.
+        
         response_data = []
         cutoff_date = datetime.today().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -464,10 +650,13 @@ def get_accounts():
             acc_dict = acc.to_dict()
             
             if acc.source == 'bank':
-                # Find ONLY SMS transactions since start of current month (PDF transactions are ALREADY in current_balance)
+                # Find ONLY SMS transactions since the last time the bank balance was updated from email/statement
+                # If last_updated is missing (first run), we use start of month
+                effective_cutoff = acc.last_updated if acc.last_updated else cutoff_date
+                
                 live_txs = Transaction.query.filter(
-                    Transaction.source == 'sms',
-                    Transaction.date >= cutoff_date
+                    Transaction.source == 'bank_sms',
+                    Transaction.date > effective_cutoff
                 ).all()
                 
                 adjustment = 0.0
@@ -478,23 +667,22 @@ def get_accounts():
                         adjustment -= tx.amount
                 
                 # TOTAL DYNAMIC BALANCE Calculation
-                # Starting Point: Real Statement Balance
-                # Add: New Real-time SMS Transactions (+/-)
-                # Subtract: Money Set Aside for Savings
-                live_balance = acc.current_balance + adjustment - total_allocated
+                # Balance is Truth (DB) + SMS Adjustment
+                live_balance = acc.current_balance + adjustment
                 
-                # Update response (We do NOT save this back to DB permanently to avoid double-counting on refresh)
+                # Update response
                 acc_dict['balance'] = live_balance
                 acc_dict['statement_base'] = acc.current_balance
                 acc_dict['live_adjustment'] = adjustment
-                acc_dict['savings_reduction'] = total_allocated
+                acc_dict['savings_reduction'] = 0.0 # Deprecated, handled via transactions
                 
             response_data.append(acc_dict)
 
         return jsonify(response_data)
 
 @app.route("/api/savings-goals", methods=["GET", "POST"])
-def manage_savings_goals():
+@token_required
+def manage_savings_goals(current_user):
     if request.method == "GET":
         goals = SavingsGoal.query.all()
         return jsonify([g.to_dict() for g in goals])
@@ -527,7 +715,8 @@ def manage_savings_goals():
         return jsonify(new_goal.to_dict()), 201
 
 @app.route("/api/savings-goals/<int:id>", methods=["PUT"])
-def update_savings_goal(id):
+@token_required
+def update_savings_goal(current_user, id):
     try:
         goal = SavingsGoal.query.get(id)
         if not goal:
@@ -555,21 +744,49 @@ def update_savings_goal(id):
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/savings-goals/<int:id>", methods=["DELETE"])
-def delete_savings_goal(id):
+@token_required
+def delete_savings_goal(current_user, id):
     try:
         goal = SavingsGoal.query.get(id)
         if not goal:
             return jsonify({"error": "Goal not found"}), 404
             
+        # REFUND LOGIC: Check if money was allocated
+        if goal.current_amount > 0:
+            refund_amount = goal.current_amount
+            
+            # Find primary bank account to refund to
+            bank_acc = AccountBalance.query.filter_by(source='bank').first()
+            if not bank_acc:
+                bank_acc = AccountBalance.query.first()
+                
+            if bank_acc:
+                bank_acc.current_balance += refund_amount
+                bank_acc.last_updated = datetime.utcnow()
+                
+                # Create Refund Transaction
+                refund_tx = Transaction(
+                    source='bank',
+                    date=datetime.utcnow(),
+                    amount=refund_amount,
+                    type='credit',
+                    purpose='Savings Refund',
+                    sender='Savings Goal',
+                    receiver='Me',
+                    notes=f"Refund from deleted goal: {goal.name}"
+                )
+                db.session.add(refund_tx)
+            
         db.session.delete(goal)
         db.session.commit()
-        return jsonify({"message": "Goal deleted successfully"}), 200
+        return jsonify({"message": "Goal deleted and funds refunded"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/savings-goals/<int:id>/contribute", methods=["POST"])
-def contribute_to_savings_goal(id):
+@token_required
+def contribute_to_savings_goal(current_user, id):
     try:
         goal = SavingsGoal.query.get(id)
         if not goal:
@@ -581,174 +798,151 @@ def contribute_to_savings_goal(id):
         if amount <= 0:
             return jsonify({"error": "Amount must be greater than zero"}), 400
             
+        # TRANSACTION Logic: Deduct from Bank Account
+        # TRANSACTION Logic: Deduct from Bank Account
+        # Try to find a 'bank' account first, otherwise pick the first available one (e.g. Cash)
+        bank_acc = AccountBalance.query.filter_by(source='bank').first()
+        if not bank_acc:
+             bank_acc = AccountBalance.query.first()
+             
+        if not bank_acc:
+            return jsonify({"error": "No account found to fund savings. Please create an account first."}), 400
+            
+        # Optional: Check Strict Balance?
+        # if bank_acc.current_balance < amount:
+        #    return jsonify({"error": "Insufficient funds in bank account"}), 400
+             
+        # 1. Deduct from Balance
+        bank_acc.current_balance -= amount
+        bank_acc.last_updated = datetime.utcnow()
+        
+        # 2. Create Debit Transaction
+        contrib_tx = Transaction(
+            source='bank',
+            date=datetime.utcnow(),
+            amount=amount,
+            type='debit',
+            purpose='Savings',
+            sender='Me',
+            receiver='Savings Goal',
+            notes=f"Contribution to: {goal.name}"
+        )
+        db.session.add(contrib_tx)
+        
+        # 3. Update Goal
         goal.current_amount += amount
+        
         db.session.commit()
         return jsonify(goal.to_dict()), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 # -------------------------
+# EXPENSE ROUTES
+# -------------------------
+@app.route("/api/expenses/total", methods=["GET"])
+@token_required
+def get_total_expenses(current_user):
+    try:
+        dt = datetime.now()
+        
+        # Calculate Expense Sum directly from Transactions
+        # This is the single source of truth for "Expenses"
+        total_expense = db.session.query(func.sum(Transaction.amount)).filter(
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month,
+            Transaction.type == 'debit'
+        ).scalar() or 0.0
+        
+        return jsonify({
+            "month": dt.strftime("%Y-%m"),
+            "total_expense": total_expense
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Failed to get total expenses: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
 # SUMMARY ROUTES
 # -------------------------
-@app.route("/api/calculate-summary", methods=["POST"])
-def calculate_summary():
-    current_month = datetime.now().strftime("%Y-%m")
-
-    try:
-        existing = MonthlyBalance.query.filter_by(month=current_month).first()
-        if existing:
-            db.session.delete(existing)
-            db.session.commit()
-            print(f"✅ Existing summary for {current_month} deleted.")
-
-        summary_data = calculate_combined_summary()
-        
-        if "error" in summary_data:
-            db.session.rollback()
-            return jsonify({
-                "message": "Calculation failed.",
-                "error": summary_data["error"]
-            }), 400
-
-        opening = summary_data["total_opening_balance"]
-        closing = summary_data["total_closing_balance"]
-        calculated_expense = summary_data["total_expense"]
-        calculated_savings = summary_data["total_savings"]
-        
-        new_summary = MonthlyBalance(
-            source="combined",
-            month=current_month,
-            opening_balance=opening,
-            closing_balance=closing,
-            expense=calculated_expense,
-            savings=calculated_savings
-        )
-        db.session.add(new_summary)
-        db.session.commit()
-        print(f"✅ New summary for {current_month} saved.")
-
-        return jsonify({
-            "message": f"Monthly summary for {current_month} calculated and saved successfully."
-        }), 200
-
-    except Exception as e:
-        db.session.rollback()
-        print(f"🚨 Server error during summary calculation: {e}")
-        return jsonify({
-            "message": "An unexpected server error occurred.",
-            "error": str(e)
-        }), 500
-
 @app.route("/api/monthly-summary", methods=["GET"])
-def get_monthly_summary_from_db():
+@token_required
+def get_monthly_summary_from_db(current_user):
     current_month = datetime.now().strftime("%Y-%m")
-
+    
     with app.app_context():
-        # 1. Determine Income (Budget > Transaction Credits)
-        # We do this first so we can use it in response regardless of summary source
-        budget_entry = Budget.query.filter_by(month=current_month).first()
-        if budget_entry and budget_entry.total_budget > 0:
-            total_income_val = budget_entry.total_budget
-        else:
-            from sqlalchemy import func, extract
-            total_income_val = (
-                db.session.query(func.sum(Transaction.amount))
-                .filter(
-                    extract('year', Transaction.date) == datetime.now().year,
-                    extract('month', Transaction.date) == datetime.now().month,
-                    Transaction.type == 'credit'
-                )
-                .scalar() or 0.0
-            )
-
-        summaries = MonthlyBalance.query.filter_by(month=current_month).all()
+        # 1. ALWAYS Calculate Truth from Transaction Table
+        dt = datetime.now()
         
-        # Auto-calculate if not found
-        if not summaries:
-            print(f"ℹ️ No summary found for {current_month}, calculating now...")
-            summary_data = calculate_combined_summary()
+        # Dynamic Expense Calculation
+        dynamic_expense = db.session.query(func.sum(Transaction.amount)).filter(
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month,
+            Transaction.type == 'debit'
+        ).scalar() or 0.0
+
+        # Dynamic Income Calculation 
+        dynamic_income_tx = db.session.query(func.sum(Transaction.amount)).filter(
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month,
+            Transaction.type == 'credit'
+        ).scalar() or 0.0
+        
+        # Check budget for income override
+        budget_entry = Budget.query.filter_by(month=current_month).first()
+        final_income = dynamic_income_tx
+        if budget_entry and budget_entry.total_budget > 0:
+            final_income = budget_entry.total_budget
             
-            if "error" in summary_data:
-                # If calculation fails (e.g. no emails at all), we should NOT return 404.
-                # We return a ZERO summary so the app works.
-                print(f"⚠️ Summary calculation failed: {summary_data['error']}. Using 0.0 defaults.")
-                opening = 0.0
-                closing = 0.0
-                calculated_expense = 0.0
-                # calculated_savings = 0.0 # We will derive this
-            else:
-                opening = summary_data["total_opening_balance"]
-                closing = summary_data["total_closing_balance"]
-                calculated_expense = summary_data["total_expense"]
-                # calculated_savings = summary_data["total_savings"]
+        final_savings = final_income - dynamic_expense
 
-            # Use our robust total_income_val
-            final_savings = total_income_val - calculated_expense
-
-            new_summary = MonthlyBalance(
-                source="combined",
+        # 2. Update/Create MonthlyBalance persistence
+        summary = MonthlyBalance.query.filter_by(month=current_month).first()
+        
+        if not summary:
+            # Create new
+            summary = MonthlyBalance(
+                source="auto-dynamic",
                 month=current_month,
-                opening_balance=opening,
-                closing_balance=closing,
-                expense=calculated_expense,
+                opening_balance=0,
+                closing_balance=0,
+                expense=dynamic_expense,
+                # income=final_income, # REMOVED
                 savings=final_savings,
                 fetched_at=datetime.utcnow()
             )
-            db.session.add(new_summary)
-            try:
-                db.session.commit()
-                print(f"✅ Auto-calculated summary for {current_month} saved.")
-                
-                # Now return the new summary
-                return jsonify({
-                    "month": current_month,
-                    "opening_balance": opening,
-                    "closing_balance": closing,
-                    "total_expense": calculated_expense,
-                    "total_income": total_income_val,
-                    "total_savings": final_savings,
-                    "fetched_at": datetime.utcnow().strftime("%d %b %Y %H:%M:%S")
-                })
-            except Exception as e:
-                db.session.rollback()
-                print(f"❌ Failed to save auto-summary: {e}")
-                return jsonify({"error": "Failed to save summary"}), 500
+            db.session.add(summary)
+        else:
+            # Update existing
+            summary.expense = dynamic_expense
+            # summary.income = final_income # REMOVED
+            summary.savings = final_savings
+            summary.fetched_at = datetime.utcnow()
+            
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Failed to update summary persistence: {e}")
 
-        # If summary exists
-        summary = summaries[0]
-        
-        # Re-calc expense from transactions for freshness (optional but good)
-        # Or just use the summary.expense if we trust it. 
-        # Let's trust summary.expense for expense, but override income.
-        
-        # Actually, let's keep the dynamic expense calc if it was there before?
-        # The previous code calculated total_expense dynamically. Let's keep that pattern.
-        total_expense_val = (
-            db.session.query(func.sum(Transaction.amount))
-            .filter(
-                extract('year', Transaction.date) == datetime.now().year,
-                extract('month', Transaction.date) == datetime.now().month,
-                Transaction.type == 'debit'
-            )
-            .scalar() or 0.0
-        )
-
-        fetched_at_str = summary.fetched_at.strftime("%d %b %Y %H:%M:%S") if summary.fetched_at else None
+        # 3. Return Dynamic Data
         return jsonify({
-            "month": summary.month,
+            "month": current_month,
             "opening_balance": summary.opening_balance,
             "closing_balance": summary.closing_balance,
-            "total_expense": total_expense_val, # Use calculated expense from transactions
-            "total_income": total_income_val,   # Use calculated/budget income
-            "total_savings": total_income_val - total_expense_val, # consistently derived
-            "fetched_at": fetched_at_str
+            "total_expense": dynamic_expense,
+            "total_income": final_income,
+            "total_savings": final_savings,
+            "fetched_at": datetime.utcnow().strftime("%d %b %Y %H:%M:%S")
         })
 
 # -------------------------
 # BUDGET ROUTES
 # -------------------------
 @app.route("/api/budget", methods=["POST"])
-def save_budget():
+@token_required
+def save_budget(current_user):
     data = request.get_json()
     month = datetime.now().strftime("%Y-%m")
     
@@ -826,12 +1020,17 @@ def get_budget(current_user):
              return jsonify({"message": f"No budget found for {month}."}), 404
         
         created_at_str = budget.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Calculate Spending Limit (User Request: Sum Wants + Needs)
+        spending_limit = (budget.needs or 0) + (budget.wants or 0)
+        
         return jsonify({
             "month": budget.month,
-            "total_budget": budget.total_budget,
+            "total_budget": budget.total_budget, # This is Income
             "needs": budget.needs,
             "wants": budget.wants,
             "saving": budget.saving,
+            "spending_limit": spending_limit, # The actual limit to show
             "created_at": created_at_str
         }), 200
 
@@ -857,8 +1056,33 @@ def get_budget_history():
             budget_rec = budget_map.get(month_str)
             balance_rec = balance_map.get(month_str)
             
-            if not budget_rec and not balance_rec:
-                continue
+            # Dynamic Calculation for Freshness
+            dt = datetime.strptime(month_str, "%Y-%m")
+            fresh_expense = db.session.query(func.sum(Transaction.amount)).filter(
+                extract('year', Transaction.date) == dt.year,
+                extract('month', Transaction.date) == dt.month,
+                Transaction.type == 'debit'
+            ).scalar() or 0.0
+            
+            fresh_income = db.session.query(func.sum(Transaction.amount)).filter(
+                extract('year', Transaction.date) == dt.year,
+                extract('month', Transaction.date) == dt.month,
+                Transaction.type == 'credit'
+            ).scalar() or 0.0
+            
+            # Use stored balance if available, otherwise 0
+            stored_expense = getattr(balance_rec, 'expense', 0.0)
+            
+            # Prefer fresh calculation if stored is 0 but fresh is > 0
+            final_expense = fresh_expense if fresh_expense > 0 else stored_expense
+            
+            # Closing balance logic
+            closing = getattr(balance_rec, 'closing_balance', 0.0)
+            
+            # Saving = Income - Expense (Simple view)
+            # Or use budget.saving if strict.
+            # Let's use (Income - Expense) as actual savings
+            final_savings = fresh_income - final_expense
 
             history_data.append({
                 "month": month_str,
@@ -869,9 +1093,9 @@ def get_budget_history():
                     "saving": getattr(budget_rec, 'saving', 0.0),
                 },
                 "actual": {
-                    "expense": getattr(balance_rec, 'expense', 0.0),
-                    "savings": getattr(balance_rec, 'savings', 0.0),
-                    "closing_balance": getattr(balance_rec, 'closing_balance', 0.0),
+                    "expense": final_expense,
+                    "savings": final_savings,
+                    "closing_balance": closing,
                 }
             })
 
@@ -1107,9 +1331,11 @@ def process_sms():
         if not message or len(message.strip()) < 10:
             return jsonify({"error": "Invalid SMS message"}), 400
         
-        transaction = process_bank_sms(message, sender)
+        # result is now (transaction, is_new)
+        transaction, is_new = process_bank_sms(message, sender)
         
         if not transaction:
+            from sms_parser import BankAlhabibSMSParser
             if not BankAlhabibSMSParser.is_transaction_sms(message):
                 return jsonify({
                     "status": "skipped",
@@ -1121,7 +1347,8 @@ def process_sms():
                     "message": "Could not parse transaction from SMS"
                 }), 400
         
-        print(f"✅ SMS transaction created: {transaction.id}")
+        status_msg = "recorded" if is_new else "already exists"
+        print(f"✅ SMS transaction {status_msg}: {transaction.id}")
         
         from model import AccountBalance
         accounts = [acc.to_dict() for acc in AccountBalance.query.all()]
@@ -1221,8 +1448,8 @@ def process_batch_sms():
         if not isinstance(messages, list) or len(messages) == 0:
             return jsonify({"error": "Messages must be non-empty array"}), 400
         
-        if len(messages) > 50:
-            return jsonify({"error": "Maximum 50 messages per batch"}), 400
+        if len(messages) > 500:
+            return jsonify({"error": "Maximum 500 messages per batch"}), 400
         
         results = {
             'total': len(messages),
@@ -1247,19 +1474,31 @@ def process_batch_sms():
                     results['skipped'] += 1
                     continue
                 
-                transaction = process_bank_sms(message, sender)
+                # result is now (transaction, is_new)
+                transaction, is_new = process_bank_sms(message, sender)
                 
                 if transaction:
-                    results['created'] += 1
+                    if is_new:
+                        results['created'] += 1
+                    else:
+                        results['skipped'] += 1
+                        
                     results['transactions'].append({
                         'id': transaction.id,
                         'type': transaction.type,
                         'amount': transaction.amount,
-                        'purpose': transaction.purpose
+                        'purpose': transaction.purpose,
+                        'is_new': is_new
                     })
                 else:
                     results['failed'] += 1
-                    results['errors'].append({'index': idx, 'error': 'Parse failed'})
+                    error_msg = f"Parse failed (No regex match)"
+                    print(f"❌ {error_msg}: {message}")
+                    results['errors'].append({
+                        'index': idx, 
+                        'error': error_msg, 
+                        'message': message  # Include the failing message in the response
+                    })
                     
             except Exception as e:
                 results['failed'] += 1
@@ -1322,24 +1561,233 @@ def update_transaction(id):
         txn = Transaction.query.get(id)
         if not txn:
             return jsonify({"error": "Transaction not found"}), 404
-            
+        
+        # Update category
+        if "category_id" in data:
+            txn.category_id = data["category_id"]
+            category = Category.query.get(data["category_id"])
+            if category:
+                txn.purpose = category.name  # Backward compat
+            txn.categorization_status = 'manual'
+        
         if "purpose" in data:
             txn.purpose = data["purpose"]
+            # Try to find matching category by name for backward compat
+            category = Category.query.filter_by(name=data["purpose"]).first()
+            if category:
+                txn.category_id = category.id
+            txn.categorization_status = 'manual'
+            
         if "notes" in data:
             txn.notes = data["notes"]
             
         db.session.commit()
-        return jsonify({"message": "Transaction updated", "transaction": {
-            "id": txn.id,
-            "purpose": txn.purpose,
-            "notes": txn.notes
-        }})
+        return jsonify({
+            "message": "Transaction updated", 
+            "transaction": txn.to_dict()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+# =======================================================
+# TRANSACTION CATEGORIZATION ENDPOINTS (NEW)
+# =======================================================
+
+@app.route("/api/transactions/uncategorized", methods=["GET"])
+@token_required
+def get_uncategorized_transactions(current_user):
+    """Get all transactions with categorization_status = 'pending'"""
+    try:
+        transactions = Transaction.query.filter_by(
+            categorization_status='pending'
+        ).order_by(Transaction.date.desc()).all()
+        
+        return jsonify({
+            "count": len(transactions),
+            "transactions": [t.to_dict() for t in transactions]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/transactions/bulk-categorize", methods=["POST"])
+@token_required
+def bulk_categorize_transactions(current_user):
+    """Bulk update categories for multiple transactions"""
+    try:
+        data = request.get_json()
+        transaction_ids = data.get('transaction_ids', [])
+        category_id = data.get('category_id')
+        
+        if not transaction_ids or not category_id:
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        category = Category.query.get(category_id)
+        if not category:
+            return jsonify({"error": "Category not found"}), 404
+        
+        updated_count = 0
+        for tx_id in transaction_ids:
+            tx = Transaction.query.get(tx_id)
+            if tx:
+                tx.category_id = category_id
+                tx.purpose = category.name
+                tx.categorization_status = 'manual'
+                updated_count += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": f"Updated {updated_count} transactions",
+            "updated_count": updated_count
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/categories/suggest", methods=["GET"])
+@token_required
+def suggest_category(current_user):
+    """Get suggested category for a merchant"""
+    try:
+        from model import CategorizationRule
+        
+        merchant = request.args.get('merchant', '').lower().strip()
+        
+        if not merchant:
+            return jsonify({"suggestion": None}), 200
+        
+        # Check user rules first
+        rule = CategorizationRule.query.filter(
+            CategorizationRule.user_id == current_user.id,
+            CategorizationRule.merchant_pattern.ilike(f"%{merchant}%")
+        ).first()
+        
+        if rule:
+            return jsonify({
+                "suggestion": rule.category.to_dict(),
+                "source": "user_rule",
+                "confidence": "high"
+            }), 200
+        
+        # Check common patterns
+        common_patterns = {
+            "mcdonald": "Food & Snacks", "burger": "Food & Snacks", "kfc": "Food & Snacks",
+            "uber": "Ride / Transport", "careem": "Ride / Transport",
+            "netflix": "Entertainment", "spotify": "Entertainment",
+            "amazon": "Shopping", "daraz": "Shopping",
+            "gym": "Gym & Fitness", "fitness": "Gym & Fitness",
+            "hospital": "Healthcare", "pharmacy": "Healthcare",
+            "electricity": "Bills & Utilities", "gas": "Bills & Utilities",
+        }
+        
+        for pattern, cat_name in common_patterns.items():
+            if pattern in merchant:
+                category = Category.query.filter_by(name=cat_name).first()
+                if category:
+                    return jsonify({
+                        "suggestion": category.to_dict(),
+                        "source": "common_pattern",
+                        "confidence": "medium"
+                    }), 200
+        
+        return jsonify({"suggestion": None}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/categorization-rules", methods=["GET", "POST"])
+@token_required
+def manage_categorization_rules(current_user):
+    """Get or create categorization rules"""
+    from model import CategorizationRule
+    
+    if request.method == "GET":
+        try:
+            rules = CategorizationRule.query.filter_by(
+                user_id=current_user.id
+            ).order_by(CategorizationRule.created_at.desc()).all()
+            
+            return jsonify({
+                "count": len(rules),
+                "rules": [r.to_dict() for r in rules]
+            }), 200
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    
+    else:  # POST
+        try:
+            data = request.get_json()
+            merchant_pattern = data.get('merchant_pattern', '').strip()
+            category_id = data.get('category_id')
+            
+            if not merchant_pattern or not category_id:
+                return jsonify({"error": "Missing required fields"}), 400
+            
+            category = Category.query.get(category_id)
+            if not category:
+                return jsonify({"error": "Category not found"}), 404
+            
+            # Check if rule already exists
+            existing_rule = CategorizationRule.query.filter_by(
+                user_id=current_user.id,
+                merchant_pattern=merchant_pattern
+            ).first()
+            
+            if existing_rule:
+                existing_rule.category_id = category_id
+                db.session.commit()
+                return jsonify({
+                    "message": "Rule updated",
+                    "rule": existing_rule.to_dict()
+                }), 200
+            
+            rule = CategorizationRule(
+                user_id=current_user.id,
+                merchant_pattern=merchant_pattern,
+                category_id=category_id
+            )
+            db.session.add(rule)
+            db.session.commit()
+            
+            return jsonify({
+                "message": "Rule created",
+                "rule": rule.to_dict()
+            }), 201
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/categorization-rules/<int:id>", methods=["DELETE"])
+@token_required
+def delete_categorization_rule(current_user, id):
+    """Delete a categorization rule"""
+    try:
+        from model import CategorizationRule
+        
+        rule = CategorizationRule.query.filter_by(
+            id=id,
+            user_id=current_user.id
+        ).first()
+        
+        if not rule:
+            return jsonify({"error": "Rule not found"}), 404
+        
+        db.session.delete(rule)
+        db.session.commit()
+        
+        return jsonify({"message": "Rule deleted"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/set_salary', methods=['POST'])
-def set_salary():
+@token_required
+def set_salary(current_user):
     try:
         data = request.json
         amount = float(data.get("amount", 0))
@@ -1354,24 +1802,553 @@ def set_salary():
              budget.total_budget = amount
 
         # Auto-Calculate 50/30/20 Rule
-        budget.needs = amount * 0.50
-        budget.wants = amount * 0.30
-        budget.saving = amount * 0.20
+        needs = amount * 0.50
+        wants = amount * 0.30
+        savings = amount * 0.20
+        
+        budget.needs = needs
+        budget.wants = wants
+        budget.saving = savings
+        
+        # User Feedback: Budget should be Spending Limit (Needs + Wants)
+        # Not the total salary.
+        budget.total_budget = needs + wants
             
         db.session.commit()
         return jsonify({
-            "message": "Salary updated successfully", 
+            "message": "Salary updated successfully. Budget set to Spending Limit (Needs + Wants).", 
             "salary": amount, 
             "month": month_str,
             "breakdown": {
                 "needs": budget.needs,
                 "wants": budget.wants,
-                "saving": budget.saving
+                "saving": budget.saving,
+                "spending_limit": budget.total_budget
             }
         })
+
+    except Exception as e:
+        print(f"❌ Error in set_salary: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/insights', methods=['GET'])
+@token_required
+def get_monthly_insight(current_user):
+    try:
+        month_str = request.args.get('month')
+        if not month_str:
+            # Default to current month
+            today = datetime.now()
+            month_str = today.strftime("%Y-%m")
+            
+        insight = FinancialInsight.query.filter_by(month=month_str).first()
+        
+        if not insight:
+            # Try previous month if current has no insight yet
+            today = datetime.now()
+            first = today.replace(day=1)
+            last_month = first - timedelta(days=1)
+            last_month_str = last_month.strftime("%Y-%m")
+            insight = FinancialInsight.query.filter_by(month=last_month_str).first()
+            
+            if not insight:
+                return jsonify({"message": "No insight found", "data": None}), 404
+        
+        return jsonify({
+            "message": "Insight retrieved",
+            "data": insight.to_dict()
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching insight: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/reports/statement/calculate", methods=["POST"])
+@token_required
+def calculate_statement(current_user):
+    from fetchers import fetch_previous_month_statement
+    from model import User, Transaction, MonthlyBalance, Budget, Category, DeviceToken, FinancialInsight, StatementAnalysis
+    from financial_agent import FinancialAgent
+    import json
+    data = request.get_json() or {}
+    month_param = data.get("month")  # Expected format YYYY-MM
+    print("🚀 Triggering Statement Calculation with month:", month_param)
+    try:
+        # If month provided, adjust date logic
+        reference_date = None
+        
+        if month_param:
+            try:
+                target_dt = datetime.strptime(month_param, "%Y-%m")
+                target_year = target_dt.year
+                target_month = target_dt.month
+                month_str = month_param
+                
+                # To fetch statement for target_month (Nov), we need to pretend we are in target_month + 1 (Dec)
+                # fetch_previous_month_statement looks for PREVIOUS month relative to input.
+                # So we pass a date in the *next* month.
+                next_month = target_dt + relativedelta(months=1)
+                reference_date = next_month.replace(day=15) # Pick mid-month to be safe
+                
+            except Exception as e:
+                return jsonify({"error": f"Invalid month format: {e}"}), 400
+        else:
+            # Default to previous month
+            today = datetime.now()
+            first_of_this = today.replace(day=1)
+            prev_month_dt = first_of_this - timedelta(days=1)
+            target_year = prev_month_dt.year
+            target_month = prev_month_dt.month
+            month_str = prev_month_dt.strftime("%Y-%m")
+            reference_date = today # Use today so it fetches previous month
+
+        # ---------------------------------------------------------
+        # OPTIMIZED FLOW: Check if READ in Database
+        # ---------------------------------------------------------
+        force_refresh = request.args.get('force', 'false').lower() == 'true'
+        existing_analysis = StatementAnalysis.query.filter_by(month=month_str).first()
+        is_read = existing_analysis and existing_analysis.reviewed_at
+        
+        if is_read and not force_refresh:
+            print(f"⚡ Loading READ Statement for {month_str} from Database (Cached)...")
+            
+            # Fetch EXACT transactions linked to this statement
+            try:
+                stmt_tx_ids = json.loads(existing_analysis.transaction_ids) if existing_analysis.transaction_ids else []
+                cached_txs = Transaction.query.filter(Transaction.id.in_(stmt_tx_ids)).order_by(Transaction.date.desc()).all()
+            except:
+                cached_txs = []
+            
+            tx_list_response = []
+            for t in cached_txs:
+                tx_list_response.append({
+                    "date": t.date.strftime("%d/%m/%Y"),
+                    "amount": t.amount,
+                    "description": t.notes or t.sender or "Transaction",
+                    "type": t.type,
+                    "status": "existing"
+                })
+                
+            return jsonify({
+                "message": "Statement loaded from cache (Read).",
+                "cached": True,
+                "month": month_str,
+                "balances": {
+                    "opening": existing_analysis.opening_balance,
+                    "closing": existing_analysis.closing_balance
+                },
+                "data": tx_list_response,
+                "stats": {
+                    "added": 0,
+                    "skipped": len(cached_txs),
+                    "total": len(cached_txs)
+                },
+                "processing_status": existing_analysis.processing_status,
+                "read_status": "read",
+                "balance_matches": True
+            }), 200
+
+        # ELSE: UNREAD or NOT EXISTS - Proceed to Email Fetching
+        print(f"📧 Fetching UNREAD or NEW statement for {month_str} from Email...")
+
+        # Fetch statement PDF/Data (Fresh)
+        result = fetch_previous_month_statement(reference_date=reference_date)
+        if "error" in result:
+            return jsonify(result), 404
+        extracted_txs = result.get("transactions", [])
+        balances = result.get("balances", {})
+        added_count = 0
+        skipped_count = 0
+        added_tx_data = []
+        stmt_transaction_ids = []
+        for tx in extracted_txs:
+            try:
+                tx_date = datetime.strptime(tx["date"], "%d/%m/%Y")
+            except:
+                continue
+            
+            clean_desc = re.sub(r'^\d{2}\/\d{2}\/\d{4}\s*', '', tx["description"]).strip()
+            exists = Transaction.query.filter(
+                func.date(Transaction.date) == tx_date.date(),
+                Transaction.amount == tx["amount"],
+                Transaction.type == tx["type"]
+            ).first()
+            
+            if exists:
+                print(f"⚠️ Duplicate Found: {tx_date} | {tx['amount']}")
+                status = "skipped"
+                skipped_count += 1
+                stmt_transaction_ids.append(exists.id)
+            else:
+                new_tx = Transaction(
+                    source="bank_statement",
+                    date=tx_date,
+                    amount=tx["amount"],
+                    type=tx["type"],
+                    purpose="Uncategorized",
+                    sender="Bank Statement",
+                    receiver="Me",
+                    notes=clean_desc[:250]
+                )
+                db.session.add(new_tx)
+                db.session.flush() # Get ID
+                status = "added"
+                added_count += 1
+                stmt_transaction_ids.append(new_tx.id)
+            
+            added_tx_data.append({
+                "date": tx["date"],
+                "amount": tx["amount"],
+                "description": clean_desc,
+                "status": status
+            })
+        # Update monthly balance
+        open_bal = balances.get("opening_balance", 0)
+        close_bal = balances.get("closing_balance", 0)
+        mb = MonthlyBalance.query.filter_by(month=month_str).first()
+        if not mb:
+            mb = MonthlyBalance(month=month_str, opening_balance=open_bal, closing_balance=close_bal, source="bank_statement")
+            db.session.add(mb)
+        else:
+            mb.opening_balance = open_bal
+            mb.closing_balance = close_bal
+        db.session.commit()
+
+        # ---------------------------------------------------------
+        # 1. Populate/Update StatementAnalysis Table
+        # ---------------------------------------------------------
+        # FIX: Calculate totals based on the ACTUAL transactions in the statement PDF
+        # instead of a strict calendar month query. This handles billing cycles that span months.
+        
+        calc_income = 0.0
+        calc_expense = 0.0
+        income_bd = {}
+        expense_bd = {}
+        
+        # extracted_txs contains all transactions found in the PDF
+        print(f"📊 Starting Analysis Calculation with {len(extracted_txs)} transactions...")
+        
+        for tx in extracted_txs:
+            try:
+                # 1. Parse Amount
+                raw_amt = str(tx.get("amount", "0"))
+                # Remove currency symbols and commas
+                clean_amt_str = raw_amt.replace("Rs", "").replace(",", "").strip()
+                amt = float(clean_amt_str)
+                
+                # 2. Parse Type
+                t_type = str(tx.get("type", "")).lower().strip()
+                desc = tx.get("description", "Uncategorized")
+                
+                # Debug log for each tx
+                print(f"   >> Processing: {desc[:20]}... | Type: {t_type} | Amt: {amt}")
+
+                # 3. Categorize & Sum
+                # Handle cases: 'debit', 'dr', 'credit', 'cr'
+                # Also check if amount itself is negative (some parsers return -39000 for debit)
+                
+                is_credit = t_type in ['credit', 'cr', 'deposit']
+                is_debit = t_type in ['debit', 'dr', 'withdrawal']
+                
+                # Fallback: Inference from amount sign if type is ambiguous
+                if not is_credit and not is_debit:
+                    if amt < 0:
+                        is_debit = True
+                        amt = abs(amt) # Treat expense as positive magnitude for summation
+                    else:
+                        # Default assumption? Standard statements usually separate columns.
+                        # If truly unknown, maybe skip or assume debit?
+                        pass 
+                
+                # Adjust amount sign for calculation
+                # We want total_income (positive) and total_expense (positive magnitude)
+                
+                cat = "Uncategorized"  # Placeholder
+                
+                if is_credit:
+                    calc_income += abs(amt)
+                    income_bd[cat] = income_bd.get(cat, 0) + abs(amt)
+                elif is_debit:
+                    # Ensure we add positive magnitude to expenses
+                    calc_expense += abs(amt) 
+                    expense_bd[cat] = expense_bd.get(cat, 0) + abs(amt)
+                else:
+                    print(f"   ⚠️ Skipping ambiguous transaction: {t_type} | {amt}")
+                    
+            except Exception as e:
+                print(f"⚠️ Error summing transaction for analysis: {e}")
+                continue
+                
+        print(f"📊 Final Calc -> Income: {calc_income}, Expense: {calc_expense}")
+                
+        calc_surplus = calc_income - calc_expense
+        calc_status = "Surplus" if calc_surplus >= 0 else "Deficit"
+        
+        breakdown_obj = {"income": income_bd, "expenses": expense_bd}
+        
+        # Update StatementAnalysis
+        stmt_analysis = StatementAnalysis.query.filter_by(month=month_str).first()
+        if not stmt_analysis:
+            stmt_analysis = StatementAnalysis(month=month_str)
+            db.session.add(stmt_analysis)
+            
+        stmt_analysis.opening_balance = open_bal
+        stmt_analysis.closing_balance = close_bal
+        stmt_analysis.total_income = calc_income
+        stmt_analysis.total_expense = calc_expense
+        stmt_analysis.net_result = calc_surplus
+        stmt_analysis.status = calc_status
+        stmt_analysis.breakdown_json = json.dumps(breakdown_obj)
+        stmt_analysis.analysis_date = datetime.utcnow()
+        stmt_analysis.transaction_ids = json.dumps(stmt_transaction_ids)
+        
+        if not stmt_analysis.statement_id:
+            stmt_analysis.statement_id = month_str
+        
+        # ----------------------------------------------------------------------
+        # OPTIMIZED BALANCE APPLICATION (ON CALCULATION IF UNREAD)
+        # Only apply closing balance to AccountBalance if UNREAD
+        # ----------------------------------------------------------------------
+        balance_update_message = ""
+        
+        if not stmt_analysis.reviewed_at:
+            from model import AccountBalance
+            account_balance = AccountBalance.query.filter_by(source='bank').first()
+            
+            if account_balance:
+                old_balance = account_balance.current_balance
+                new_balance = old_balance + close_bal
+                account_balance.current_balance = new_balance
+                account_balance.last_updated = datetime.utcnow()
+                account_balance.is_manual = False
+                balance_update_message = f"Balance increased by {close_bal:.2f} (Marked Read)"
+            else:
+                account_balance = AccountBalance(
+                    source='bank',
+                    current_balance=close_bal,
+                    last_updated=datetime.utcnow(),
+                    is_manual=False
+                )
+                db.session.add(account_balance)
+                balance_update_message = f"Balance set to {close_bal:.2f} (Marked Read)"
+            
+            stmt_analysis.balance_applied = True
+            stmt_analysis.reviewed_at = datetime.utcnow()  # MARK AS READ IMMEDIATELY
+            print(f"✅ UNREAD Statement {month_str} processed & balance added.")
+        else:
+            balance_update_message = "Statement already read - no balance update."
+        
+        db.session.commit()
+        print(f"✅ Updated StatementAnalysis for {month_str}")
+
+        # --- TRIGGER AI ANALYSIS ---
+        response = {
+            "message": "Statement processed",
+            "month": month_str,
+            "added_transactions": added_count,
+            "skipped_transactions": skipped_count,
+            "data": added_tx_data,
+            "balances": {"opening": open_bal, "closing": close_bal},
+            "balance_update": balance_update_message,
+            "processing_status": stmt_analysis.processing_status,
+            "read_status": "read", # It was just marked read above
+            "balance_matches": True
+        }
+        # ---------------------------------------------------------
+        # DRIVE BACKUP TRIGGER
+        # ---------------------------------------------------------
+        if current_user.google_refresh_token:
+             from drive_utils import get_drive_service, ensure_folder_path, upload_json
+             try:
+                 print(f"☁️ Backing up {month_str} to Drive...")
+                 service = get_drive_service(current_user)
+                 if service:
+                     backup_payload = {
+                         "month": month_str,
+                         "transactions": extracted_txs,
+                         "balances": balances,
+                         "summary": {
+                            "opening": open_bal,
+                            "closing": close_bal,
+                            "expense": mb.expense if mb.expense else 0.0,
+                            "savings": mb.savings if mb.savings else 0.0
+                         }
+                     }
+                     folder_id = ensure_folder_path(service, ["Aurestra Finance", month_str])
+                     if folder_id:
+                         upload_json(service, folder_id, "statement.json", backup_payload)
+             except Exception as drive_err:
+                 print(f"⚠️ Drive Backup Failed: {drive_err}")
+
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/sms/process", methods=["POST"])
+@token_required
+def api_process_sms(current_user):
+    from sms_parser import process_bank_sms
+    
+    try:
+        data = request.get_json() or {}
+        message = data.get("message")
+        sender = data.get("sender", "BAHL")
+        
+        if not message:
+            return jsonify({"error": "Message content is required"}), 400
+            
+        print(f"📩 Processing SMS from {sender}: {message[:50]}...")
+        
+        # Process the SMS
+        # result is (transaction, is_new)
+        tx, is_new = process_bank_sms(message, sender)
+        
+        if not tx:
+             # Check if it was ignored or failed
+             from sms_parser import BankAlhabibSMSParser
+             if not BankAlhabibSMSParser.is_transaction_sms(message):
+                 return jsonify({
+                     "status": "ignored", 
+                     "message": "SMS is not a transaction"
+                 }), 200
+             else:
+                 return jsonify({
+                     "status": "failed",
+                     "message": "Could not parse SMS"
+                 }), 400
+             
+        # Verification: Check if it actually saved
+        tx_data = {
+            "id": tx.id,
+            "amount": tx.amount,
+            "type": tx.type,
+            "description": tx.notes,
+            "date": tx.date.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_new": is_new
+        }
+        return jsonify({
+            "status": "success",
+            "message": "Transaction recorded" if is_new else "Transaction already exists",
+            "transaction": tx_data
+        }), 201
+            
+        return jsonify(result), 200
+
+    except Exception as e:
+        print(f"❌ SMS API Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/calculate-summary", methods=["POST"])
+def calculate_summary_endpoint():
+    try:
+        data = request.get_json() or {}
+        month_str = data.get("month", datetime.now().strftime("%Y-%m"))
+        
+        dt = datetime.strptime(month_str, "%Y-%m")
+        
+        # Live Calculation
+        total_income = db.session.query(func.sum(Transaction.amount)).filter(
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month,
+            Transaction.type == 'credit'
+        ).scalar() or 0.0
+        
+        total_expense = db.session.query(func.sum(Transaction.amount)).filter(
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month,
+            Transaction.type == 'debit'
+        ).scalar() or 0.0
+        
+        total_savings = total_income - total_expense
+        
+        # Update MonthlyBalance in DB for persistence
+        summary = MonthlyBalance.query.filter_by(month=month_str).first()
+        if not summary:
+            summary = MonthlyBalance(
+                month=month_str, 
+                opening_balance=0, 
+                closing_balance=0,
+                source="combined"  # Explicitly set source
+            )
+            db.session.add(summary)
+        
+        # Update fields
+        summary.expense = total_expense
+        summary.savings = total_savings
+        summary.closing_balance = summary.opening_balance + total_income - total_expense
+        # Ensure source is set if updating existing
+        if not summary.source:
+             summary.source = "combined"
+             
+        db.session.commit()
+
+        # --- TRIGGER AI ANALYSIS ---
+        try:
+            print(f"🤖 Triggering Financial Agent for {target_year}-{target_month:02d}...")
+            agent = FinancialAgent()
+            agent.analyze_month(target_year, target_month)
+        except Exception as e:
+            print(f"❌ Financial Agent Error: {e}")
+            # Don't fail the whole request if analysis fails, just log it.
+
+        # Backup to Google Drive (if enabled)
+        backup_status = "skipped"
+        if current_user.google_refresh_token:
+             # DRY import (better to move to top, but local for now)
+             from drive_utils import get_drive_service, ensure_folder_path, upload_json
+             try:
+                 print(f"☁️ Backing up {month_str} to Drive...")
+                 service = get_drive_service(current_user)
+                 if service:
+                     # Create payload consistent with frontend expectation
+                     backup_payload = {
+                         "month": month_str,
+                         "transactions": extracted_txs,
+                         "balances": balances,
+                         "summary": {
+                            "opening": selected_opening,
+                            "closing": selected_closing,
+                            "expense": new_summ.expense,
+                            "savings": new_summ.savings
+                         }
+                     }
+                     folder_id = ensure_folder_path(service, ["Aurestra Finance", month_str])
+                     if folder_id:
+                         upload_json(service, folder_id, "statement.json", backup_payload)
+             except Exception as e:
+                 print(f"⚠️ Drive Backup Failed: {e}")
+
+        response_payload = {
+            "message": f"Statement processed for {month_str}",
+            "transactions_added": added_count,
+            "transactions_skipped": skipped_count,
+            "data": {
+                "month": month_str,
+                "transactions": extracted_txs,
+                "balances": balances,
+                "summary": {
+                    "opening": selected_opening,
+                    "closing": selected_closing,
+                    "expense": new_summ.expense,
+                    "savings": new_summ.savings
+                }
+            }
+        }
+        return jsonify(response_payload), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+def get_statement_report(current_user):
+    # ... existing implementation ...
+    pass
+
 
 # -------------------------
 # STARTUP
@@ -1419,9 +2396,123 @@ def seed_categories():
         db.session.commit()
         print("✅ Categories seeded")
 
-if __name__ == "__main__":
+@app.route("/api/insights", methods=["GET"])
+@token_required
+def get_insights(current_user):
+    from model import FinancialInsight
+    from sqlalchemy import desc
+    insights = FinancialInsight.query.order_by(desc(FinancialInsight.month)).all()
+    return jsonify([i.to_dict() for i in insights]), 200
+
+@app.route("/api/insights/generate", methods=["POST"])
+@token_required
+def generate_insights(current_user):
+    try:
+        from datetime import datetime, date, timedelta
+        from model import FinancialInsight
+        from financial_agent import FinancialAgent
+        from fetchers import fetch_latest_bank_email
+        
+        data = request.get_json() or {}
+        month_str = data.get("month") # YYYY-MM
+        
+        # 1. Sync Data first (User requirement: "open bank statement...")
+        print("🔄 Manual Trigger: Syncing Bank Data...")
+        try:
+            fetch_latest_bank_email()
+            # We can also fetch wallet/easypaisa if needed
+        except Exception as e:
+            print(f"⚠️ Sync failed: {e}")
+            # Continue anyway, maybe transactions are already there
+            
+        # 2. Determine target month
+        target_year = None
+        target_month = None
+        
+        if month_str:
+            dt = datetime.strptime(month_str, "%Y-%m")
+            target_year = dt.year
+            target_month = dt.month
+        else:
+            # Default to PREVIOUS month as per user description ("january looks at december")
+            # But allowing "Current Month" might be useful?
+            # User said: "calculate the monthly summary for THAT month."
+            # If I am in Jan, and I click button, do I want Jan summary (partial) or Dec (complete)?
+            # User said: "For example, if it's January, it should look at all of December..."
+            # So default = Previous Month.
+            today = date.today()
+            first = today.replace(day=1)
+            prev = first - timedelta(days=1)
+            target_year = prev.year
+            target_month = prev.month
+            
+        # 3. Use Financial Agent
+        agent = FinancialAgent()
+        agent.analyze_month(target_year, target_month)
+        
+        return jsonify({
+            "message": f"Insights generated for {target_year}-{target_month:02d}",
+            "month": f"{target_year}-{target_month:02d}"
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Generation failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/reports/statement/mark-read", methods=["POST"])
+@token_required
+def mark_statement_as_read(current_user):
+    from model import StatementAnalysis, AccountBalance
+    data = request.get_json() or {}
+    month_str = data.get("month")
+    
+    if not month_str:
+        return jsonify({"error": "Month is required"}), 400
+        
+    stmt = StatementAnalysis.query.filter_by(month=month_str).first()
+    if not stmt:
+        return jsonify({"error": "Statement not found"}), 404
+    
+    # ADDITIVE BALANCE LOGIC (MOVED HERE)
+    # Only if NOT already applied
+    if not stmt.balance_applied:
+        close_bal = stmt.closing_balance
+        account_balance = AccountBalance.query.filter_by(source='bank').first()
+        
+        if account_balance:
+            old_balance = account_balance.current_balance
+            new_balance = old_balance + close_bal
+            account_balance.current_balance = new_balance
+            account_balance.last_updated = datetime.utcnow()
+            account_balance.is_manual = False
+            print(f"💰 [mark-read] ADDED Balance: {old_balance} + {close_bal} = {new_balance}")
+        else:
+            account_balance = AccountBalance(
+                source='bank',
+                current_balance=close_bal,
+                last_updated=datetime.utcnow(),
+                is_manual=False
+            )
+            db.session.add(account_balance)
+            print(f"💰 [mark-read] SET Balance: {close_bal}")
+            
+        stmt.balance_applied = True
+
+    if not stmt.reviewed_at:
+        stmt.reviewed_at = datetime.utcnow()
+        print(f"✅ Marked statement {month_str} as READ")
+    
+    db.session.commit()
+    return jsonify({
+        "message": "Statement marked as read and balance updated", 
+        "balance_applied": stmt.balance_applied,
+        "reviewed_at": stmt.reviewed_at.isoformat()
+    })
+
+if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         print("✅ Tables ensured in database")
         seed_categories()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Use 0.0.0.0 to allow access from other devices/emulator
+    app.run(host='0.0.0.0', port=5000, debug=True)
