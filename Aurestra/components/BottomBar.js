@@ -11,10 +11,13 @@ const BottomBar = ({ navigation }) => {
   const isScreenActive = (screenName) =>
     activeRouteName === screenName;
 
-  const { t } = useSettings();
+  const { t, colors } = useSettings();
 
   return (
-    <View style={styles.bottomNav}>
+    <View style={[styles.bottomNav, {
+      backgroundColor: colors.card,
+      borderTopColor: colors.border
+    }]}>
       <TouchableOpacity
         style={styles.navItem}
         onPress={() => navigation.navigate('Home')}
@@ -22,19 +25,20 @@ const BottomBar = ({ navigation }) => {
         <View
           style={[
             styles.navIconWrapper,
-            isScreenActive('Home') && styles.navIconActive,
+            isScreenActive('Home') && { backgroundColor: colors.primary },
           ]}
         >
           <Icon
             name="home"
             size={24}
-            color={isScreenActive('Home') ? '#FFFFFF' : '#94A3B8'}
+            color={isScreenActive('Home') ? '#FFFFFF' : colors.textSecondary}
           />
         </View>
         <Text
           style={[
             styles.navLabel,
-            isScreenActive('Home') && styles.navLabelActive,
+            { color: colors.textSecondary },
+            isScreenActive('Home') && { color: colors.primary },
           ]}
         >
           {t('home')}
@@ -48,19 +52,20 @@ const BottomBar = ({ navigation }) => {
         <View
           style={[
             styles.navIconWrapper,
-            isScreenActive('Budget') && styles.navIconActive,
+            isScreenActive('Budget') && { backgroundColor: colors.primary },
           ]}
         >
           <Icon
             name="chart-bar"
             size={24}
-            color={isScreenActive('Budget') ? '#FFFFFF' : '#94A3B8'}
+            color={isScreenActive('Budget') ? '#FFFFFF' : colors.textSecondary}
           />
         </View>
         <Text
           style={[
             styles.navLabel,
-            isScreenActive('Budget') && styles.navLabelActive,
+            { color: colors.textSecondary },
+            isScreenActive('Budget') && { color: colors.primary },
           ]}
         >
           {t('budget')}
@@ -74,19 +79,20 @@ const BottomBar = ({ navigation }) => {
         <View
           style={[
             styles.navIconWrapper,
-            isScreenActive('Transaction') && styles.navIconActive,
+            isScreenActive('Transaction') && { backgroundColor: colors.primary },
           ]}
         >
           <Icon
             name="swap-horizontal"
             size={24}
-            color={isScreenActive('Transaction') ? '#FFFFFF' : '#94A3B8'}
+            color={isScreenActive('Transaction') ? '#FFFFFF' : colors.textSecondary}
           />
         </View>
         <Text
           style={[
             styles.navLabel,
-            isScreenActive('Transaction') && styles.navLabelActive,
+            { color: colors.textSecondary },
+            isScreenActive('Transaction') && { color: colors.primary },
           ]}
         >
           {t('transactions')}
@@ -100,19 +106,20 @@ const BottomBar = ({ navigation }) => {
         <View
           style={[
             styles.navIconWrapper,
-            isScreenActive('Saving') && styles.navIconActive,
+            isScreenActive('Saving') && { backgroundColor: colors.primary },
           ]}
         >
           <Icon
             name="piggy-bank"
             size={24}
-            color={isScreenActive('Saving') ? '#FFFFFF' : '#94A3B8'}
+            color={isScreenActive('Saving') ? '#FFFFFF' : colors.textSecondary}
           />
         </View>
         <Text
           style={[
             styles.navLabel,
-            isScreenActive('Saving') && styles.navLabelActive,
+            { color: colors.textSecondary },
+            isScreenActive('Saving') && { color: colors.primary },
           ]}
         >
           {t('savings')}
@@ -126,19 +133,20 @@ const BottomBar = ({ navigation }) => {
         <View
           style={[
             styles.navIconWrapper,
-            isScreenActive('Profile') && styles.navIconActive,
+            isScreenActive('Profile') && { backgroundColor: colors.primary },
           ]}
         >
           <Icon
             name="account-circle"
             size={24}
-            color={isScreenActive('Profile') ? '#FFFFFF' : '#94A3B8'}
+            color={isScreenActive('Profile') ? '#FFFFFF' : colors.textSecondary}
           />
         </View>
         <Text
           style={[
             styles.navLabel,
-            isScreenActive('Profile') && styles.navLabelActive,
+            { color: colors.textSecondary },
+            isScreenActive('Profile') && { color: colors.primary },
           ]}
         >
           {t('profile')}
@@ -156,11 +164,9 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
   },
   navItem: {
     alignItems: 'center',
@@ -170,16 +176,9 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 16,
   },
-  navIconActive: {
-    backgroundColor: '#3B82F6',
-  },
   navLabel: {
     fontSize: 11,
-    color: '#64748B',
     fontWeight: '500',
-  },
-  navLabelActive: {
-    color: '#3B82F6',
   },
 });
 

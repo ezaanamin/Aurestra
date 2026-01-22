@@ -1,8 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useSettings } from '../context/SettingsContext';
 
 const Header = () => {
   const currentHour = new Date().getHours();
+  const { colors } = useSettings();
 
   let financeGreeting = '';
   if (currentHour >= 6 && currentHour < 11) {
@@ -18,10 +20,10 @@ const Header = () => {
   return (
     <View style={styles.container}>
       <View style={styles.textWrapper}>
-        <Text style={styles.greeting}>
+        <Text style={[styles.greeting, { color: colors.headerText }]}>
           Welcome back, boss — ready for today’s insights?
         </Text>
-        <Text style={styles.subGreeting}>{financeGreeting}</Text>
+        <Text style={[styles.subGreeting, { color: colors.headerText }]}>{financeGreeting}</Text>
       </View>
     </View>
   );

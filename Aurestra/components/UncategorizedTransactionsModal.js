@@ -11,9 +11,11 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchCategories } from '../API/slice/API';
+import { useSettings } from '../context/SettingsContext';
 
 const UncategorizedTransactionsModal = ({ visible, onClose, transaction }) => {
     const dispatch = useDispatch();
+    const { colors } = useSettings();
     const categories = useSelector((state) => state.API.categories || []);
     const [selectedCategory, setSelectedCategory] = useState(null);
     const [customNote, setCustomNote] = useState('');
@@ -61,25 +63,25 @@ const UncategorizedTransactionsModal = ({ visible, onClose, transaction }) => {
             animationType="slide"
             onRequestClose={() => onClose(null)}
         >
-            <View style={styles.overlay}>
-                <View style={styles.modalContainer}>
+            <View style={[styles.overlay, { backgroundColor: colors.modalOverlay }]}>
+                <View style={[styles.modalContainer, { backgroundColor: colors.card }]}>
                     <View style={styles.header}>
-                        <Text style={styles.title}>{isEdit ? 'Edit Transaction' : 'New Transaction Detected'}</Text>
+                        <Text style={[styles.title, { color: colors.text }]}>{isEdit ? 'Edit Transaction' : 'New Transaction Detected'}</Text>
                     </View>
 
-                    <View style={styles.txDetails}>
-                        <Text style={[styles.amount, { color: isDebit ? '#EF4444' : '#10B981' }]}>
+                    <View style={[styles.txDetails, { backgroundColor: colors.background }]}>
+                        <Text style={[styles.amount, { color: isDebit ? colors.error : colors.success }]}>
                             {isDebit ? '-' : '+'} Rs. {Math.abs(transaction.amount).toLocaleString()}
                         </Text>
-                        <Text style={styles.merchant}>
+                        <Text style={[styles.merchant, { color: colors.textSecondary }]}>
                             {transaction.sender || transaction.receiver || 'Unknown Merchant'}
                         </Text>
-                        <Text style={styles.date}>
+                        <Text style={[styles.date, { color: colors.textSecondary }]}>
                             {new Date(transaction.date).toLocaleString()}
                         </Text>
                     </View>
 
-                    <Text style={styles.sectionTitle}>What was this for?</Text>
+                    <Text style={[styles.sectionTitle, { color: colors.text }]}>What was this for?</Text>
 
                     <ScrollView style={styles.categoriesList} horizontal showsHorizontalScrollIndicator={false}>
                         {categories
@@ -95,18 +97,20 @@ const UncategorizedTransactionsModal = ({ visible, onClose, transaction }) => {
                                     key={cat.id}
                                     style={[
                                         styles.categoryChip,
-                                        selectedCategory?.id === cat.id && styles.categoryChipSelected,
+                                        { backgroundColor: colors.background },
+                                        selectedCategory?.id === cat.id && { backgroundColor: colors.primary },
                                     ]}
                                     onPress={() => setSelectedCategory(cat)}
                                 >
                                     <Icon
                                         name={cat.icon}
                                         size={20}
-                                        color={selectedCategory?.id === cat.id ? '#FFFFFF' : '#64748B'}
+                                        color={selectedCategory?.id === cat.id ? '#FFFFFF' : colors.textSecondary}
                                     />
                                     <Text
                                         style={[
                                             styles.categoryText,
+                                            { color: colors.textSecondary },
                                             selectedCategory?.id === cat.id && styles.categoryTextSelected,
                                         ]}
                                     >
@@ -116,17 +120,17 @@ const UncategorizedTransactionsModal = ({ visible, onClose, transaction }) => {
                             ))}
                     </ScrollView>
 
-                    <Text style={styles.sectionTitle}>Add a note (optional)</Text>
+                    <Text style={[styles.sectionTitle, { color: colors.text }]}>Add a note (optional)</Text>
                     <TextInput
-                        style={styles.input}
+                        style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
                         placeholder="e.g. Lunch with friends"
-                        placeholderTextColor="#94A3B8"
+                        placeholderTextColor={colors.textSecondary}
                         value={customNote}
                         onChangeText={setCustomNote}
                     />
 
                     <TouchableOpacity
-                        style={[styles.saveButton, !selectedCategory && styles.saveButtonDisabled]}
+                        style={[styles.saveButton, { backgroundColor: colors.primary }, !selectedCategory && styles.saveButtonDisabled]}
                         onPress={handleSave}
                         disabled={!selectedCategory}
                     >
@@ -141,11 +145,9 @@ const UncategorizedTransactionsModal = ({ visible, onClose, transaction }) => {
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
         justifyContent: 'flex-end',
     },
     modalContainer: {
-        backgroundColor: '#FFFFFF',
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         padding: 24,
@@ -160,13 +162,11 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 18,
         fontWeight: 'bold',
-        color: '#1E293B',
     },
     txDetails: {
         alignItems: 'center',
         marginBottom: 24,
         padding: 16,
-        backgroundColor: '#F8FAFC',
         borderRadius: 16,
     },
     amount: {
@@ -176,17 +176,14 @@ const styles = StyleSheet.create({
     },
     merchant: {
         fontSize: 16,
-        color: '#64748B',
         marginBottom: 4,
     },
     date: {
         fontSize: 12,
-        color: '#94A3B8',
     },
     sectionTitle: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#1E293B',
         marginBottom: 12,
     },
     categoriesList: {
@@ -199,41 +196,33 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 16,
         paddingVertical: 8,
-        backgroundColor: '#F1F5F9',
         borderRadius: 20,
         marginRight: 8,
         height: 40,
         gap: 8,
     },
-    categoryChipSelected: {
-        backgroundColor: '#3B82F6',
-    },
     categoryText: {
         fontSize: 13,
-        color: '#64748B',
         fontWeight: '500',
     },
     categoryTextSelected: {
         color: '#FFFFFF',
     },
     input: {
-        backgroundColor: '#F8FAFC',
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
         padding: 16,
         fontSize: 16,
-        color: '#1E293B',
         marginBottom: 24,
     },
     saveButton: {
-        backgroundColor: '#3B82F6',
         borderRadius: 16,
         padding: 16,
         alignItems: 'center',
     },
     saveButtonDisabled: {
         backgroundColor: '#94A3B8',
+        opacity: 0.5,
     },
     saveButtonText: {
         color: '#FFFFFF',

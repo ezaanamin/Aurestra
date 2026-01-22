@@ -4,14 +4,16 @@ import { useSelector, useDispatch } from 'react-redux';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { BarChart } from 'react-native-chart-kit';
 import { fetchFourMonthHistory } from "../API/slice/API";
+import { useSettings } from '../context/SettingsContext';
 
 const MonthlyExpenseChart = () => {
   const dispatch = useDispatch();
-  
+  const { colors, isDarkMode } = useSettings();
+
   const historyData = useSelector((state) => state.API.fourMonthHistory);
   const historyStatus = useSelector((state) => state.API.historyStatus);
-  const historyError = useSelector((state) => state.API.historyError); 
-  
+  const historyError = useSelector((state) => state.API.historyError);
+
   useEffect(() => {
     if (historyStatus === 'idle') {
       dispatch(fetchFourMonthHistory());
@@ -27,8 +29,8 @@ const MonthlyExpenseChart = () => {
         actualExpense > totalBudget
           ? 'over_budget'
           : totalBudget > 0
-          ? 'under_budget'
-          : 'default';
+            ? 'under_budget'
+            : 'default';
 
       return {
         month: item.month,
@@ -42,9 +44,9 @@ const MonthlyExpenseChart = () => {
   // Handle Loading/Error/Empty States
   if (historyStatus === 'loading') {
     return (
-      <View style={[styles.chartCard, styles.center]}>
-        <ActivityIndicator size="large" color="red" />
-        <Text style={{ marginTop: 10, color: '#red', fontWeight: '500' }}>
+      <View style={[styles.chartCard, styles.center, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={{ marginTop: 10, color: colors.textSecondary, fontWeight: '500' }}>
           Loading Budget History...
         </Text>
       </View>
@@ -54,12 +56,12 @@ const MonthlyExpenseChart = () => {
   if (historyStatus === 'failed') {
     console.log("Budget History Fetch Failed:", historyError);
     return (
-      <View style={[styles.chartCard, styles.center]}>
-        <Icon name="alert-circle-outline" size={32} color="#e53e3e" style={{ marginBottom: 8 }} />
-        <Text style={[styles.chartTitle, { color: '#e53e3e', fontSize: 18 }]}>
+      <View style={[styles.chartCard, styles.center, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Icon name="alert-circle-outline" size={32} color={colors.error} style={{ marginBottom: 8 }} />
+        <Text style={[styles.chartTitle, { color: colors.error, fontSize: 18 }]}>
           Data Load Failed
         </Text>
-        <Text style={styles.chartSubtitle}>
+        <Text style={[styles.chartSubtitle, { color: colors.textSecondary }]}>
           Error: {historyError || 'An unknown error occurred. See console for details.'}
         </Text>
       </View>
@@ -68,10 +70,10 @@ const MonthlyExpenseChart = () => {
 
   if (chartData.length === 0 && historyStatus === 'succeeded') {
     return (
-      <View style={[styles.chartCard, styles.center]}>
-        <Icon name="database-off" size={32} color="red" style={{ marginBottom: 8 }} />
-        <Text style={styles.chartTitle}>No Historical Data</Text>
-        <Text style={styles.chartSubtitle}>
+      <View style={[styles.chartCard, styles.center, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Icon name="database-off" size={32} color={colors.icon} style={{ marginBottom: 8 }} />
+        <Text style={[styles.chartTitle, { color: colors.text }]}>No Historical Data</Text>
+        <Text style={[styles.chartSubtitle, { color: colors.textSecondary }]}>
           Set a budget and track expenses to populate this chart.
         </Text>
       </View>
@@ -99,49 +101,49 @@ const MonthlyExpenseChart = () => {
     datasets: [
       {
         data: chartData.map(item => (item.type === 'over_budget' ? item.value : 0)),
-        color: () => '#ef4444', // Red for Over Budget
+        color: () => colors.error, // Red for Over Budget
       },
       {
         data: chartData.map(item => (item.type === 'under_budget' ? item.value : 0)),
-        color: () => '#48bb78', // Green for Under Budget
+        color: () => colors.success, // Green for Under Budget // Originally #48bb78 which is very similar to success
       },
     ],
   };
 
   const screenWidth = Dimensions.get('window').width - 60;
 
- const isOverBudget = chartData.some(item => item.type === 'over_budget');
+  const isOverBudget = chartData.some(item => item.type === 'over_budget');
 
-const chartConfig = {
-  backgroundColor: '#ffffff',
-  backgroundGradientFrom: '#ffffff',
-  backgroundGradientTo: '#ffffff',
-  decimalPlaces: 0,
-  color: (opacity = 1) =>
-    isOverBudget
-      ? `rgba(239, 68, 68, ${opacity})` // Red
-      : `rgba(72, 187, 120, ${opacity})`, // Green
-  labelColor: (opacity = 1) => `rgba(45, 55, 72, ${opacity})`,
-  barPercentage: 0.6,
-  propsForBackgroundLines: {
-    strokeDasharray: '',
-    stroke: '#e2e8f0',
-    strokeWidth: 1,
-  },
-  formatYLabel: (value) => `Rs${formatShortCurrency(parseFloat(value))}`,
-};
+  const chartConfig = {
+    backgroundColor: colors.card,
+    backgroundGradientFrom: colors.card,
+    backgroundGradientTo: colors.card,
+    decimalPlaces: 0,
+    color: (opacity = 1) =>
+      isOverBudget
+        ? `rgba(${isDarkMode ? '248, 113, 113' : '239, 68, 68'}, ${opacity})` // Red (approx from theme)
+        : `rgba(${isDarkMode ? '52, 211, 153' : '72, 187, 120'}, ${opacity})`, // Green (approx from theme)
+    labelColor: (opacity = 1) => isDarkMode ? `rgba(255, 255, 255, ${opacity})` : `rgba(45, 55, 72, ${opacity})`,
+    barPercentage: 0.6,
+    propsForBackgroundLines: {
+      strokeDasharray: '',
+      stroke: colors.border,
+      strokeWidth: 1,
+    },
+    formatYLabel: (value) => `Rs${formatShortCurrency(parseFloat(value))}`,
+  };
 
 
   // Render Component
   return (
-    <View style={styles.chartCard}>
+    <View style={[styles.chartCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.headerContainer}>
         <View>
-          <Text style={styles.chartTitle}>Actual Monthly Spending</Text>
-          <Text style={styles.chartSubtitle}>Last {chartData.length} months</Text>
+          <Text style={[styles.chartTitle, { color: colors.text }]}>Actual Monthly Spending</Text>
+          <Text style={[styles.chartSubtitle, { color: colors.textSecondary }]}>Last {chartData.length} months</Text>
         </View>
-        <View style={styles.iconContainer}>
-          <Icon name="chart-bar" size={24} color="#4299e1" />
+        <View style={[styles.iconContainer, { backgroundColor: colors.primary + '20' }]}>
+          <Icon name="chart-bar" size={24} color={colors.primary} />
         </View>
       </View>
 
@@ -160,14 +162,14 @@ const chartConfig = {
         />
       </View>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, { borderTopColor: colors.border }]}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, styles.legendDotUnderBudget]} />
-          <Text style={styles.legendText}>Under Budget</Text>
+          <View style={[styles.legendDot, { backgroundColor: colors.success }]} />
+          <Text style={[styles.legendText, { color: colors.textSecondary }]}>Under Budget</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, styles.legendDotOverBudget]} />
-          <Text style={styles.legendText}>Over Budget</Text>
+          <View style={[styles.legendDot, { backgroundColor: colors.error }]} />
+          <Text style={[styles.legendText, { color: colors.textSecondary }]}>Over Budget</Text>
         </View>
       </View>
     </View>
@@ -177,7 +179,6 @@ const chartConfig = {
 // Styles
 const styles = StyleSheet.create({
   chartCard: {
-    backgroundColor: '#fff',
     borderRadius: 20,
     padding: 20,
     marginBottom: 20,
@@ -187,7 +188,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 12,
     borderWidth: 1,
-    borderColor: '#f0f4f8',
   },
   center: {
     minHeight: 150,
@@ -201,20 +201,17 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   iconContainer: {
-    backgroundColor: '#ebf8ff',
     borderRadius: 12,
     padding: 10,
   },
   chartTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1a202c',
     marginBottom: 4,
     textAlign: 'center',
   },
   chartSubtitle: {
     fontSize: 13,
-    color: '#718096',
     fontWeight: '500',
     textAlign: 'center',
   },
@@ -231,7 +228,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: '#f0f4f8',
     gap: 16,
     flexWrap: 'wrap',
   },
@@ -245,15 +241,8 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginRight: 6,
   },
-  legendDotOverBudget: {
-    backgroundColor: '#ef4444',
-  },
-  legendDotUnderBudget: {
-    backgroundColor: '#48bb78',
-  },
   legendText: {
     fontSize: 12,
-    color: '#718096',
     fontWeight: '500',
   },
 });

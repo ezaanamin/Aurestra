@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useSettings } from '../context/SettingsContext';
 
 const formatPKR = (amount) => {
   const value = typeof amount === 'number' ? amount : 0;
@@ -19,7 +20,7 @@ const BudgetProgressBar = ({ savings, budget, expense }) => {
       </View>
     );
   }
-  
+
   // Calculate budget utilization and savings performance against budget
   const amountRemaining = budget - expense;
   const progress = (expense / budget) * 100;
@@ -53,14 +54,15 @@ const BudgetProgressBar = ({ savings, budget, expense }) => {
   );
 };
 
-const AccountSummary = ({ 
-  totalBalance, 
-  totalExpense, 
+const AccountSummary = ({
+  totalBalance,
+  totalExpense,
   totalSavings, // NEW
   totalBudget,  // NEW
   rawExpense    // NEW: Raw expense amount for calculation
 }) => {
-  
+  const { colors, isDarkMode } = useSettings();
+
   // Current date for "last updated"
   const currentDate = new Date();
   const formattedDate = currentDate.toLocaleDateString('en-US', {
@@ -74,9 +76,15 @@ const AccountSummary = ({
   const formattedBudget = formatPKR(totalBudget);
   const formattedSavings = formatPKR(totalSavings);
 
+  // We keep the card colored (Primary color) to make it stand out, 
+  // but ensure it works in dark mode too (Primary is adjusted in theme).
+  // Text inside this card is always light because the card background is colored.
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, {
+      backgroundColor: colors.primary,
+      borderColor: isDarkMode ? colors.border : 'rgba(255,255,255,0.2)'
+    }]}>
       {/* Balance, Expense, and Savings */}
       <View style={styles.balanceContainer}>
         <View style={styles.balanceBox}>
@@ -87,14 +95,14 @@ const AccountSummary = ({
         </View>
 
         <View style={styles.verticalDivider} />
-        
+
         <View style={styles.balanceBox}>
           <Text style={styles.label}>Total Expense</Text>
           <Text style={styles.expenseAmount} numberOfLines={1} adjustsFontSizeToFit>
             {totalExpense}
           </Text>
         </View>
-        
+
         <View style={styles.verticalDivider} />
 
         {/* NEW: Total Savings Box */}
@@ -108,7 +116,7 @@ const AccountSummary = ({
 
       {/* Divider */}
       <View style={styles.horizontalDivider} />
-      
+
       {/* Budget Goal */}
       <View style={styles.budgetGoalContainer}>
         <Text style={styles.budgetGoalLabel}>Monthly Budget :</Text>
@@ -119,12 +127,12 @@ const AccountSummary = ({
       <View style={styles.horizontalDivider} />
 
       {/* Budget Performance Progress Bar */}
-      <BudgetProgressBar 
-        savings={totalSavings} 
-        budget={totalBudget} 
-        expense={rawExpense} 
+      <BudgetProgressBar
+        savings={totalSavings}
+        budget={totalBudget}
+        expense={rawExpense}
       />
-      
+
       <Text style={styles.lastUpdated}>Last summary calculated: {formattedDate}</Text>
     </View>
   );
@@ -132,9 +140,9 @@ const AccountSummary = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#4299e1', // CHANGED: Blue background
-    borderRadius: 15,
     padding: 15,
+    borderRadius: 15,
+    // Shadow properties
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -142,8 +150,7 @@ const styles = StyleSheet.create({
     elevation: 8,
     marginBottom: 10,
     marginHorizontal: 15,
-    borderWidth: 1, // Added border for subtle definition
-    borderColor: 'rgba(255,255,255,0.2)', // Light border
+    borderWidth: 1,
   },
   balanceContainer: {
     flexDirection: 'row',
@@ -159,33 +166,33 @@ const styles = StyleSheet.create({
   verticalDivider: {
     width: 1,
     height: '100%',
-    backgroundColor: 'rgba(255,255,255,0.3)', // CHANGED: Lighter divider for blue background
+    backgroundColor: 'rgba(255,255,255,0.3)', // Lighter divider
   },
   horizontalDivider: {
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.2)', // CHANGED: Lighter divider for blue background
+    backgroundColor: 'rgba(255,255,255,0.2)', // Lighter divider
     marginVertical: 10,
   },
   label: {
     fontSize: 12,
-    color: '#e2e8f0', // CHANGED: Lighter gray for readability on blue
+    color: '#e2e8f0', // Always light since bg is themed primary
     marginBottom: 4,
     fontWeight: '500',
   },
   amount: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff', // CHANGED: White for total balance
+    color: '#fff', // Always white
   },
   expenseAmount: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fca5a5', // CHANGED: Lighter red for readability on blue
+    color: '#fca5a5', // Light red for readability on colored bg
   },
   savingsAmount: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#a7f3d0', // CHANGED: Lighter green for readability on blue
+    color: '#a7f3d0', // Light green for readability on colored bg
   },
   budgetGoalContainer: {
     flexDirection: 'row',
@@ -195,12 +202,12 @@ const styles = StyleSheet.create({
   },
   budgetGoalLabel: {
     fontSize: 14,
-    color: '#e2e8f0', // CHANGED: Lighter gray
+    color: '#e2e8f0',
     fontWeight: '600',
   },
   budgetGoalAmount: {
     fontSize: 14,
-    color: '#fff', // CHANGED: White
+    color: '#fff',
     fontWeight: '600',
   },
   progressBarSection: {
@@ -210,7 +217,7 @@ const styles = StyleSheet.create({
   },
   progressBarBackground: {
     height: 10,
-    backgroundColor: 'rgba(255,255,255,0.3)', // CHANGED: Lighter background for progress bar
+    backgroundColor: 'rgba(255,255,255,0.3)',
     borderRadius: 5,
     overflow: 'hidden',
     marginBottom: 5,
@@ -227,7 +234,7 @@ const styles = StyleSheet.create({
   progressMessage: {
     fontSize: 12,
     fontWeight: '500',
-    color: '#e2e8f0', // CHANGED: Lighter gray for message
+    color: '#e2e8f0',
   },
   budgetStatusContainer: {
     alignItems: 'center',
@@ -235,12 +242,12 @@ const styles = StyleSheet.create({
   },
   budgetStatusText: {
     fontSize: 12,
-    color: '#e2e8f0', // CHANGED: Lighter gray for italic text
+    color: '#e2e8f0',
     fontStyle: 'italic',
   },
   lastUpdated: {
     fontSize: 10,
-    color: '#cbd5e0', // CHANGED: Even lighter gray
+    color: '#cbd5e0',
     textAlign: 'center',
     marginTop: 5,
   },

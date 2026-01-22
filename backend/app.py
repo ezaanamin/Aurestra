@@ -63,15 +63,29 @@ def token_required(f):
                 token = auth_header.split(" ")[1]
         
         if not token:
+            print("❌ [Auth] Token missing in headers")
             return jsonify({'message': 'Token is missing!'}), 401
         
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user = User.query.get(data['user_id'])
+            user_id = data.get('user_id')
+            # print(f"🔍 [Auth] Token Decoded. User ID: {user_id}")
+            
+            with app.app_context():
+                current_user = User.query.get(user_id)
+                
             if not current_user:
-                return jsonify({'message': 'User invalid!'}), 401
-        except:
+                print(f"❌ [Auth] User {user_id} NOT found in DB. Table empty or reset?")
+                return jsonify({'message': 'User invalid! (DB Record Missing)'}), 401
+        except jwt.ExpiredSignatureError:
+            print("❌ [Auth] Token Expired")
+            return jsonify({'message': 'Token expired!'}), 401
+        except jwt.InvalidTokenError as e:
+            print(f"❌ [Auth] Token Invalid: {e}")
             return jsonify({'message': 'Token is invalid!'}), 401
+        except Exception as e:
+            print(f"❌ [Auth] Unexpected Auth Error: {e}")
+            return jsonify({'message': 'Token error'}), 401
             
         return f(current_user, *args, **kwargs)
     
@@ -246,7 +260,11 @@ def test_route():
 
 @app.route("/")
 def home():
-    return "Backend Running ✅"
+    db_uri = app.config.get('SQLALCHEMY_DATABASE_URI', 'Unknown')
+    # Mask password
+    safe_uri = re.sub(r':([^@]+)@', ':****@', db_uri)
+    print(f"🌍 Home Hit. Connected to: {safe_uri}")
+    return f"Backend Running ✅ (DB: {safe_uri})"
 
 # -------------------------
 # AUTH ROUTES
@@ -2509,10 +2527,36 @@ def mark_statement_as_read(current_user):
         "reviewed_at": stmt.reviewed_at.isoformat()
     })
 
-if __name__ == '__main__':
+# --- Scheduler & Backup ---
+from flask_apscheduler import APScheduler
+from backup_manager import BackupManager
+
+scheduler = APScheduler()
+backup_manager = BackupManager()
+
+def scheduled_backup_job():
     with app.app_context():
-        db.create_all()
-        print("✅ Tables ensured in database")
-        seed_categories()
+        # NOTE: Scheduler runs in its own context, so we re-push app context
+        backup_manager.perform_backup()
+
+# --- Gunicorn/Production Entry Point ---
+# This block runs when Gunicorn imports 'app'
+with app.app_context():
+    db.create_all()
+    # verify_columns(app) # Optional: if you have the helper
+    # seed_categories() # Good to have seeded
+    # print("✅ [Prod/Dev] Database tables ensured.")
+    
+    # Init Backup
+    backup_manager.init_app(app)
+    
+    # Init Scheduler (only if not already running to avoid double-init on reloads)
+    if not scheduler.running:
+        scheduler.add_job(id='daily_backup', func=scheduled_backup_job, trigger='cron', hour=3, minute=0)
+        scheduler.init_app(app)
+        scheduler.start()
+        print("⏰ [System] Backup Scheduler Started")
+
+if __name__ == '__main__':
     # Use 0.0.0.0 to allow access from other devices/emulator
     app.run(host='0.0.0.0', port=5000, debug=True)

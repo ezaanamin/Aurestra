@@ -22,11 +22,13 @@ import { API_BASE_URL } from '../API_URL';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import CustomModal from '../components/CustomModal';
+import { useSettings } from '../context/SettingsContext';
 
 import { launchImageLibrary } from 'react-native-image-picker';
 
 const EditProfileScreen = ({ navigation }) => {
     const dispatch = useDispatch();
+    const { colors, isDarkMode } = useSettings();
     const { user } = useSelector((state) => state.API);
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
@@ -187,11 +189,11 @@ const EditProfileScreen = ({ navigation }) => {
     };
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+            <StatusBar barStyle="light-content" backgroundColor={colors.headerBackground} />
 
             {/* Header */}
-            <LinearGradient colors={['#1E293B', '#334155']} style={styles.header}>
+            <LinearGradient colors={isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155']} style={styles.header}>
                 <View style={styles.headerContent}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                         <Icon name="arrow-left" size={24} color="#FFFFFF" />
@@ -221,34 +223,34 @@ const EditProfileScreen = ({ navigation }) => {
                 </View>
 
                 <View style={styles.formGroup}>
-                    <Text style={styles.label}>Full Name</Text>
-                    <View style={styles.inputContainer}>
-                        <Icon name="account" size={20} color="#64748B" />
+                    <Text style={[styles.label, { color: colors.textSecondary }]}>Full Name</Text>
+                    <View style={[styles.inputContainer, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+                        <Icon name="account" size={20} color={colors.textSecondary} />
                         <TextInput
-                            style={styles.input}
+                            style={[styles.input, { color: colors.text }]}
                             value={name}
                             onChangeText={setName}
                             placeholder="Enter your full name"
-                            placeholderTextColor="#94A3B8"
+                            placeholderTextColor={colors.textSecondary}
                         />
                     </View>
                 </View>
 
                 <View style={styles.formGroup}>
-                    <Text style={styles.label}>Email Address</Text>
-                    <View style={styles.inputContainer}>
-                        <Icon name="email" size={20} color="#64748B" />
+                    <Text style={[styles.label, { color: colors.textSecondary }]}>Email Address</Text>
+                    <View style={[styles.inputContainer, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+                        <Icon name="email" size={20} color={colors.textSecondary} />
                         <TextInput
-                            style={styles.input}
+                            style={[styles.input, { color: colors.text }]}
                             value={email}
                             onChangeText={setEmail}
                             keyboardType="email-address"
                             placeholder="Enter email"
-                            placeholderTextColor="#94A3B8"
+                            placeholderTextColor={colors.textSecondary}
                             editable={false} // Prevent email change for now if it's identity
                         />
                     </View>
-                    <Text style={styles.helperText}>Email cannot be changed directly.</Text>
+                    <Text style={[styles.helperText, { color: colors.textSecondary }]}>Email cannot be changed directly.</Text>
                 </View>
 
                 {/* Avatar URL Input Removed as per user request */}

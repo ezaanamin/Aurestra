@@ -2,8 +2,11 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const ExpenseChart = () => {
+  const { colors } = useSettings();
+
   // Dummy data for the chart bars
   const chartData = [
     { week: '1st Week', height1: '25%', height2: '15%' },
@@ -13,35 +16,34 @@ const ExpenseChart = () => {
   ];
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.card }]}>
       {/* Chart header with title and icons */}
       <View style={styles.header}>
-        <Text style={styles.title}>April Expenses</Text>
+        <Text style={[styles.title, { color: colors.text }]}>April Expenses</Text>
         <View style={styles.iconGroup}>
-          <Icon name="magnify" size={24} color="#a0aec0" style={styles.icon} />
-          <Icon name="calendar-month-outline" size={24} color="#a0aec0" />
+          <Icon name="magnify" size={24} color={colors.icon} style={styles.icon} />
+          <Icon name="calendar-month-outline" size={24} color={colors.icon} />
         </View>
       </View>
       {/* Main chart area */}
       <View style={styles.chartArea}>
         {/* Y-axis labels */}
         <View style={styles.yAxis}>
-          <Text style={styles.yAxisLabel}>15k</Text>
-          <Text style={styles.yAxisLabel}>10k</Text>
-          <Text style={styles.yAxisLabel}>5k</Text>
-          <Text style={styles.yAxisLabel}>1k</Text>
+          {['15k', '10k', '5k', '1k'].map(label => (
+            <Text key={label} style={[styles.yAxisLabel, { color: colors.textSecondary }]}>{label}</Text>
+          ))}
           <Text style={styles.yAxisLabel}></Text>
         </View>
         {/* Chart bars */}
         <View style={styles.chart}>
           {chartData.map((data, index) => (
             <View key={index} style={styles.barGroup}>
-              {/* First bar (green) */}
-              <View style={[styles.bar, styles.greenBar, { height: data.height1 }]} />
-              {/* Second bar (blue) */}
-              <View style={[styles.bar, styles.blueBar, { height: data.height2 }]} />
+              {/* First bar (green/secondary) */}
+              <View style={[styles.bar, { backgroundColor: colors.secondary, height: data.height1 }]} />
+              {/* Second bar (blue/primary) */}
+              <View style={[styles.bar, { backgroundColor: colors.primary, height: data.height2 }]} />
               {/* X-axis label (week) */}
-              <Text style={styles.xAxisLabel}>{data.week}</Text>
+              <Text style={[styles.xAxisLabel, { color: colors.textSecondary }]}>{data.week}</Text>
             </View>
           ))}
         </View>
@@ -52,7 +54,6 @@ const ExpenseChart = () => {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#fff',
     marginHorizontal: 20,
     borderRadius: 20,
     padding: 20,
@@ -72,7 +73,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2d3748',
   },
   iconGroup: {
     flexDirection: 'row',
@@ -90,7 +90,6 @@ const styles = StyleSheet.create({
   },
   yAxisLabel: {
     fontSize: 12,
-    color: '#a0aec0',
   },
   chart: {
     flex: 1,
@@ -108,16 +107,9 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginHorizontal: 2,
   },
-  greenBar: {
-    backgroundColor: '#34d399',
-  },
-  blueBar: {
-    backgroundColor: '#4299e1',
-  },
   xAxisLabel: {
     fontSize: 12,
     marginTop: 5,
-    color: '#718096',
   },
 });
 

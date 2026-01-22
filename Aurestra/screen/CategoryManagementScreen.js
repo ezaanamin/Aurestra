@@ -19,7 +19,7 @@ import { useSettings } from '../context/SettingsContext';
 const CategoryManagementScreen = ({ navigation }) => {
     const dispatch = useDispatch();
     const { categories, categoriesStatus } = useSelector((state) => state.API);
-    const { isDarkMode } = useSettings();
+    const { colors, isDarkMode } = useSettings();
     const [modalVisible, setModalVisible] = useState(false);
     const [newCatName, setNewCatName] = useState('');
     const [selectedIcon, setSelectedIcon] = useState('cash');
@@ -85,21 +85,14 @@ const CategoryManagementScreen = ({ navigation }) => {
         );
     };
 
-    const themeColors = {
-        bg: isDarkMode ? '#0F172A' : '#F8FAFC',
-        card: isDarkMode ? '#1E293B' : '#FFFFFF',
-        text: isDarkMode ? '#F1F5F9' : '#1E293B',
-        subText: isDarkMode ? '#94A3B8' : '#64748B',
-        border: isDarkMode ? '#334155' : '#E2E8F0',
-        primary: '#3B82F6',
-    };
+
 
     const renderItem = ({ item }) => (
-        <View style={[styles.categoryItem, { backgroundColor: themeColors.card, borderColor: themeColors.border }]}>
-            <View style={[styles.iconContainer, { backgroundColor: themeColors.bg }]}>
-                <Icon name={item.icon} size={24} color={themeColors.primary} />
+        <View style={[styles.categoryItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.iconContainer, { backgroundColor: colors.background }]}>
+                <Icon name={item.icon} size={24} color={colors.primary} />
             </View>
-            <Text style={[styles.categoryName, { color: themeColors.text }]}>{item.name}</Text>
+            <Text style={[styles.categoryName, { color: colors.text }]}>{item.name}</Text>
             {!item.is_default && (
                 <TouchableOpacity onPress={() => handleDelete(item.id, item.name, item.is_default)}>
                     <Icon name="delete-outline" size={24} color="#EF4444" />
@@ -114,19 +107,19 @@ const CategoryManagementScreen = ({ navigation }) => {
     );
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: themeColors.bg }]}>
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <Icon name="arrow-left" size={24} color={themeColors.text} />
+                    <Icon name="arrow-left" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={[styles.title, { color: themeColors.text }]}>Manage Categories</Text>
+                <Text style={[styles.title, { color: colors.text }]}>Manage Categories</Text>
                 <TouchableOpacity onPress={() => setModalVisible(true)} style={styles.addButton}>
-                    <Icon name="plus" size={24} color={themeColors.primary} />
+                    <Icon name="plus" size={24} color={colors.primary} />
                 </TouchableOpacity>
             </View>
 
             {categoriesStatus === 'loading' ? (
-                <ActivityIndicator size="large" color={themeColors.primary} style={{ marginTop: 50 }} />
+                <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 50 }} />
             ) : (
                 <FlatList
                     data={categories}
@@ -134,7 +127,7 @@ const CategoryManagementScreen = ({ navigation }) => {
                     keyExtractor={(item) => item.id.toString()}
                     contentContainerStyle={styles.listContent}
                     ListEmptyComponent={
-                        <Text style={[styles.emptyText, { color: themeColors.subText }]}>No categories found</Text>
+                        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No categories found</Text>
                     }
                 />
             )}
@@ -146,25 +139,25 @@ const CategoryManagementScreen = ({ navigation }) => {
                 onRequestClose={() => setModalVisible(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, { backgroundColor: themeColors.card }]}>
-                        <Text style={[styles.modalTitle, { color: themeColors.text }]}>Add Category</Text>
+                    <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+                        <Text style={[styles.modalTitle, { color: colors.text }]}>Add Category</Text>
 
                         <TextInput
-                            style={[styles.input, { backgroundColor: themeColors.bg, color: themeColors.text, borderColor: themeColors.border }]}
+                            style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
                             placeholder="Category Name"
-                            placeholderTextColor={themeColors.subText}
+                            placeholderTextColor={colors.textSecondary}
                             value={newCatName}
                             onChangeText={setNewCatName}
                         />
 
-                        <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Category Type</Text>
+                        <Text style={[styles.sectionTitle, { color: colors.text }]}>Category Type</Text>
                         <View style={styles.typeSelector}>
                             {['spending', 'income', 'both'].map((type) => (
                                 <TouchableOpacity
                                     key={type}
                                     style={[
                                         styles.typeButton,
-                                        catType === type && { backgroundColor: themeColors.primary, borderColor: themeColors.primary }
+                                        catType === type && { backgroundColor: colors.primary, borderColor: colors.primary }
                                     ]}
                                     onPress={() => setCatType(type)}
                                 >
@@ -178,26 +171,24 @@ const CategoryManagementScreen = ({ navigation }) => {
                             ))}
                         </View>
 
-                        <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Select Icon</Text>
-                        <View style={{ maxHeight: 200 }}>
-                            <FlatList
-                                data={icons}
-                                keyExtractor={(item) => item}
-                                numColumns={5}
-                                renderItem={({ item: icon }) => (
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.iconOption,
-                                            selectedIcon === icon && { backgroundColor: themeColors.primary + '20', borderColor: themeColors.primary }
-                                        ]}
-                                        onPress={() => setSelectedIcon(icon)}
-                                    >
-                                        <Icon name={icon} size={24} color={selectedIcon === icon ? themeColors.primary : themeColors.subText} />
-                                    </TouchableOpacity>
-                                )}
-                                contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
-                            />
-                        </View>
+                        <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Icon</Text>
+                        <FlatList
+                            data={icons}
+                            numColumns={6}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={[
+                                        styles.iconOption,
+                                        { borderColor: selectedIcon === item ? colors.primary : colors.border }
+                                    ]}
+                                    onPress={() => setSelectedIcon(item)}
+                                >
+                                    <Icon name={item} size={24} color={colors.text} />
+                                </TouchableOpacity>
+                            )}
+                            keyExtractor={(item) => item}
+                            contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+                        />
 
                         <View style={styles.modalButtons}>
                             <TouchableOpacity style={styles.cancelButton} onPress={() => setModalVisible(false)}>
@@ -209,8 +200,8 @@ const CategoryManagementScreen = ({ navigation }) => {
                         </View>
                     </View>
                 </View>
-            </Modal>
-        </SafeAreaView>
+            </Modal >
+        </SafeAreaView >
     );
 };
 

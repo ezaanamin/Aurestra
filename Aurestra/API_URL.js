@@ -1,1 +1,1 @@
-export const API_BASE_URL = 'https://485cbf86465e.ngrok-free.app'
+export const API_BASE_URL = 'https://aurestra-backend.onrender.com'

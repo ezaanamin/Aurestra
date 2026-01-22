@@ -3,14 +3,17 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const ProfileListItem = ({ icon, label }) => {
+  const { colors } = useSettings();
+
   return (
-    <TouchableOpacity style={styles.container}>
-      <View style={styles.iconContainer}>
-        <Icon name={icon} size={24} color="#4299e1" />
+    <TouchableOpacity style={[styles.container, { borderBottomColor: colors.border }]}>
+      <View style={[styles.iconContainer, { backgroundColor: colors.primary + '20' }]}>
+        <Icon name={icon} size={24} color={colors.primary} />
       </View>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
     </TouchableOpacity>
   );
 };
@@ -21,20 +24,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#edf2f7',
   },
   iconContainer: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#ebf4ff',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 15,
   },
   label: {
     fontSize: 16,
-    color: '#2d3748',
   },
 });
 

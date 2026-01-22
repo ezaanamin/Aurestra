@@ -19,7 +19,7 @@ import CustomModal from '../components/CustomModal';
 const LinkedAccountsScreen = ({ navigation }) => {
     const dispatch = useDispatch();
     const { accounts, accountsStatus } = useSelector((state) => state.API);
-    const { t, isDarkMode } = useSettings();
+    const { t, isDarkMode, colors } = useSettings();
 
     const [modalVisible, setModalVisible] = useState(false);
     const [modalConfig, setModalConfig] = useState({ title: '', message: '', type: 'info', onConfirm: null });
@@ -55,17 +55,10 @@ const LinkedAccountsScreen = ({ navigation }) => {
         showAlert("Add Account", "This feature will connect to Plaid/Bank API.");
     };
 
-    const themeStyles = {
-        container: isDarkMode ? '#0F172A' : '#F8FAFC',
-        text: isDarkMode ? '#F1F5F9' : '#1E293B',
-        cardBg: isDarkMode ? '#1E293B' : '#FFFFFF',
-        headerGradient: isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155'],
-        subText: isDarkMode ? '#94A3B8' : '#64748B',
-        border: isDarkMode ? '#334155' : '#E2E8F0'
-    };
+
 
     const renderItem = ({ item }) => (
-        <View style={[styles.accountCard, { backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border }]}>
+        <View style={[styles.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={styles.cardLeft}>
                 <View style={[styles.iconWrapper, { backgroundColor: item.source === 'bank' ? '#EFF6FF' : '#F0FDF4' }]}>
                     <Icon
@@ -75,10 +68,10 @@ const LinkedAccountsScreen = ({ navigation }) => {
                     />
                 </View>
                 <View style={styles.accountInfo}>
-                    <Text style={[styles.accountName, { color: themeStyles.text }]}>
+                    <Text style={[styles.accountName, { color: colors.text }]}>
                         {item.source === 'bank' ? 'Bank Account' : 'Digital Wallet'}
                     </Text>
-                    <Text style={[styles.accountNumber, { color: themeStyles.subText }]}>
+                    <Text style={[styles.accountNumber, { color: colors.textSecondary }]}>
                         {item.account_number ? `**** ${item.account_number.slice(-4)}` : 'Main Wallet'}
                     </Text>
                 </View>
@@ -90,11 +83,11 @@ const LinkedAccountsScreen = ({ navigation }) => {
     );
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: themeStyles.container }]}>
-            <StatusBar barStyle="light-content" backgroundColor={themeStyles.headerGradient[0]} />
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+            <StatusBar barStyle="light-content" backgroundColor={colors.headerBackground} />
 
             {/* Header */}
-            <LinearGradient colors={themeStyles.headerGradient} style={styles.header}>
+            <LinearGradient colors={isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155']} style={styles.header}>
                 <View style={styles.headerContent}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                         <Icon name="arrow-left" size={24} color="#FFFFFF" />
@@ -116,7 +109,7 @@ const LinkedAccountsScreen = ({ navigation }) => {
                         renderItem={renderItem}
                         contentContainerStyle={styles.listContent}
                         ListEmptyComponent={
-                            <Text style={[styles.emptyText, { color: themeStyles.subText }]}>No linked accounts found.</Text>
+                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No linked accounts found.</Text>
                         }
                     />
                 )}

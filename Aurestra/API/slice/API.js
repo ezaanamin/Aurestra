@@ -2,27 +2,49 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from "../../API_URL"
+import { ToastAndroid } from 'react-native';
 import { reset } from '../../navigation/RootNavigation';
 
-// Request interceptor to add token
+// =======================================================
+// AXIOS CONFIGURATION
+// =======================================================
+
+// Set default base URL
+axios.defaults.baseURL = API_BASE_URL;
+
+// Request Interceptor: Attach token to all requests
 axios.interceptors.request.use(
   async (config) => {
     const token = await AsyncStorage.getItem('userToken');
+    // silent: no debug logging
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    return Promise.reject(error);
+  }
 );
 
-// Response interceptor to handle 401
+// Response Interceptor: Handle 401 errors (invalid/expired token)
 axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+      console.log('🚨 401/403 Error - Clearing auth and redirecting to login');
+
+      // Clear all auth data
       await AsyncStorage.removeItem('userToken');
+      await AsyncStorage.removeItem('userData');
+
+      // Show user-friendly message
+      ToastAndroid.show('⚠️ Session expired. Please login again.', ToastAndroid.LONG);
+
+      // Force navigation to login screen
       reset('Login');
+
+      // App.js will automatically redirect to login when token is null
     }
     return Promise.reject(error);
   }
@@ -40,6 +62,19 @@ export const registerDeviceToken = createAsyncThunk(
   }
 );
 
+export const checkBackendHealth = createAsyncThunk(
+  'api/checkBackendHealth',
+  async (_, { rejectWithValue }) => {
+    try {
+      // Simple ping to root or specific health endpoint
+      const response = await axios.get(`${API_BASE_URL}/`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue('Backend offline');
+    }
+  }
+);
+
 // =======================================================
 // AUTH THUNKS
 // =======================================================
@@ -51,6 +86,32 @@ export const loginUser = createAsyncThunk(
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Login failed');
+    }
+  }
+);
+
+export const loginWithGoogle = createAsyncThunk(
+  'api/loginWithGoogle',
+  async ({ idToken, serverAuthCode }, { rejectWithValue }) => {
+    try {
+      const url = `${API_BASE_URL}/api/google/login`;
+      console.log('🚀 [Google Login] Sending Request to:', url);
+      console.log('🚀 [Google Login] Payload:', { idToken: idToken.substring(0, 20) + '...', serverAuthCode: serverAuthCode ? 'PRESENT' : 'MISSING' });
+
+      const response = await axios.post(url, { idToken, serverAuthCode });
+      if (response.data.token) {
+        await AsyncStorage.setItem('userToken', response.data.token);
+      }
+      return response.data;
+    } catch (error) {
+      console.error('❌ [Google Login] Failed Raw Error:', JSON.stringify(error, null, 2));
+      console.error('❌ [Google Login] Error Message:', error.message);
+      console.error('❌ [Google Login] Response Status:', error.response?.status);
+      console.error('❌ [Google Login] Response Data:', error.response?.data);
+
+      const message = error.response?.data?.message || error.message || 'Google Login failed';
+      const status = error.response?.status ? ` (Status: ${error.response.status})` : '';
+      return rejectWithValue(`${message}${status}`);
     }
   }
 );
@@ -128,6 +189,20 @@ export const saveBudget = createAsyncThunk(
   }
 );
 
+export const setSalary = createAsyncThunk(
+  'api/setSalary',
+  async (amount, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/set_salary`, { amount });
+      // Refresh budget after setting salary
+      dispatch(fetchBudget());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to set salary');
+    }
+  }
+);
+
 // =======================================================
 // SUMMARY ASYNC THUNKS
 // =======================================================
@@ -147,8 +222,15 @@ export const fetchMonthlySummary = createAsyncThunk(
           month: summary.month,
           opening_balance: summary.opening_balance,
           closing_balance: summary.closing_balance,
-          expense: summary.expense,
-          savings: summary.savings,
+          // Backend returns 'total_expense', 'total_income', 'total_savings'
+          total_expense: summary.total_expense,
+          total_income: summary.total_income,
+          total_savings: summary.total_savings,
+
+          // Map to legacy keys if components use them
+          expense: summary.total_expense,
+          savings: summary.total_savings,
+
           fetched_at: fetched_at_str,
         };
       });
@@ -167,7 +249,7 @@ export const calculateMonthlySummary = createAsyncThunk(
   'api/calculateMonthlySummary',
   async (_, { rejectWithValue, getState }) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/calculate-summary`);
+      const response = await axios.post(`${API_BASE_URL}/api/reports/statement/calculate`, {});
       return response.data;
     } catch (error) {
       console.error('calculateMonthlySummary error:', error.response || error.message);
@@ -221,6 +303,35 @@ export const fetchStatementReport = createAsyncThunk(
     try {
       // month format: YYYY-MM or null
       const response = await axios.post(`${API_BASE_URL}/api/reports/statement`, { month });
+      return response.data;
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.response?.data?.error || error.message;
+      return rejectWithValue(message);
+    }
+  }
+);
+
+
+export const calculatePreviousStatement = createAsyncThunk(
+  'api/calculatePreviousStatement',
+  async (monthStr, { rejectWithValue }) => {
+    try {
+      const payload = monthStr ? { month: monthStr } : {};
+      const response = await axios.post(`${API_BASE_URL}/api/reports/statement/calculate`, payload);
+      return response.data;
+    } catch (error) {
+      const message = error?.response?.data?.message || error?.response?.data?.error || error.message;
+      return rejectWithValue(message);
+    }
+  }
+);
+
+
+export const markStatementRead = createAsyncThunk(
+  'api/markStatementRead',
+  async (monthStr, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/reports/statement/mark-read`, { month: monthStr });
       return response.data;
     } catch (error) {
       const message = error?.response?.data?.message || error?.response?.data?.error || error.message;
@@ -363,6 +474,52 @@ export const processSMS = createAsyncThunk(
 );
 
 /**
+ * Process multiple SMS messages in a batch
+ * @param {Array} messages - Array of { message: string, sender: string }
+ */
+export const processSMSBatch = createAsyncThunk(
+  'api/processSMSBatch',
+  async (messages, { rejectWithValue }) => {
+    try {
+      if (!messages || messages.length === 0) {
+        return rejectWithValue('No messages to process');
+      }
+
+      console.log(`🚀 Sending batch of ${messages.length} SMS to backend...`);
+      const response = await axios.post(`${API_BASE_URL}/api/sms/batch`, {
+        messages
+      });
+
+      console.log('✅ Batch response:', response.data);
+      return response.data; // { created, skipped, failed, transactions, errors }
+    } catch (error) {
+      const errorMessage = error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        error.message;
+      console.error('processSMSBatch error:', errorMessage);
+      return rejectWithValue(errorMessage);
+    }
+  }
+);
+
+export const fetchFinancialInsight = createAsyncThunk(
+  'api/fetchFinancialInsight',
+  async (month = null, { rejectWithValue }) => {
+    try {
+      const url = month ? `${API_BASE_URL}/api/insights?month=${month}` : `${API_BASE_URL}/api/insights`;
+      console.log('Fetching insight from:', url);
+      const response = await axios.get(url);
+      return response.data;
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        return null; // No insight found is fine
+      }
+      return rejectWithValue(error.response?.data?.message || 'Failed to fetch insight');
+    }
+  }
+);
+
+/**
  * Test SMS parsing without saving to database
  * @param {object} smsData - { message: string, sender?: string }
  */
@@ -472,6 +629,8 @@ export const createSavingsGoal = createAsyncThunk(
       const response = await axios.post(`${API_BASE_URL}/api/savings-goals`, goalData);
       // Refresh list
       dispatch(fetchSavingsGoals());
+      // Refresh user accounts (TOTAL BALANCE UPDATE)
+      dispatch(fetchUserAccounts());
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to create goal');
@@ -485,6 +644,7 @@ export const updateSavingsGoal = createAsyncThunk(
     try {
       const response = await axios.put(`${API_BASE_URL}/api/savings-goals/${id}`, data);
       dispatch(fetchSavingsGoals());
+      dispatch(fetchUserAccounts());
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to update goal');
@@ -498,6 +658,7 @@ export const deleteSavingsGoal = createAsyncThunk(
     try {
       await axios.delete(`${API_BASE_URL}/api/savings-goals/${id}`);
       dispatch(fetchSavingsGoals());
+      dispatch(fetchUserAccounts());
       return id;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to delete goal');
@@ -511,6 +672,7 @@ export const contributeToSavingsGoal = createAsyncThunk(
     try {
       const response = await axios.post(`${API_BASE_URL}/api/savings-goals/${id}/contribute`, { amount });
       dispatch(fetchSavingsGoals());
+      dispatch(fetchUserAccounts());
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to contribute to goal');
@@ -527,6 +689,138 @@ export const fetchCurrentSummary = createAsyncThunk(
       return response.data;
     } catch (error) {
       return rejectWithValue(error.message);
+    }
+  }
+);
+
+export const fetchTotalExpenses = createAsyncThunk(
+  'api/fetchTotalExpenses',
+  async (_, { rejectWithValue }) => {
+    try {
+      // Calls the dedicated expense endpoint
+      const response = await axios.get(`${API_BASE_URL}/api/expenses/total`);
+      // return { total_expense: 1234, month: ... }
+      return response.data;
+    } catch (error) {
+      console.error('fetchTotalExpenses error:', error.message);
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
+// =======================================================
+// MANUAL BALANCE ASYNC THUNK
+// =======================================================
+
+export const setManualBalance = createAsyncThunk(
+  'api/setManualBalance',
+  async ({ amount, source = 'bank' }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/accounts/set_balance`, {
+        amount,
+        source
+      });
+
+      // Refresh accounts after setting balance
+      dispatch(fetchUserAccounts());
+
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to set balance');
+    }
+  }
+);
+
+// =======================================================
+// TRANSACTION CATEGORIZATION THUNKS (NEW)
+// =======================================================
+
+export const fetchUncategorizedTransactions = createAsyncThunk(
+  'api/fetchUncategorizedTransactions',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/transactions/uncategorized`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to fetch uncategorized transactions');
+    }
+  }
+);
+
+export const bulkCategorizeTransactions = createAsyncThunk(
+  'api/bulkCategorizeTransactions',
+  async ({ transaction_ids, category_id }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/transactions/bulk-categorize`,
+        { transaction_ids, category_id }
+      );
+
+      dispatch(fetchUncategorizedTransactions());
+      dispatch(fetchLatestTransactions(50));
+
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Bulk update failed');
+    }
+  }
+);
+
+export const getSuggestedCategory = createAsyncThunk(
+  'api/getSuggestedCategory',
+  async (merchant, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(
+        `${API_BASE_URL}/api/categories/suggest?merchant=${encodeURIComponent(merchant)}`
+      );
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
+export const fetchCategorizationRules = createAsyncThunk(
+  'api/fetchCategorizationRules',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/categorization-rules`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to fetch rules');
+    }
+  }
+);
+
+export const createCategorizationRule = createAsyncThunk(
+  'api/createCategorizationRule',
+  async ({ merchant_pattern, category_id }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/categorization-rules`,
+        { merchant_pattern, category_id }
+      );
+
+      dispatch(fetchCategorizationRules());
+
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to create rule');
+    }
+  }
+);
+
+export const deleteCategorizationRule = createAsyncThunk(
+  'api/deleteCategorizationRule',
+  async (ruleId, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.delete(`${API_BASE_URL}/api/categorization-rules/${ruleId}`);
+
+      dispatch(fetchCategorizationRules());
+
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to delete rule');
     }
   }
 );
@@ -561,6 +855,22 @@ const initialState = {
   goalsStatus: 'idle',
   goalsError: null,
 
+  // Transaction Categorization (NEW)
+  uncategorizedTransactions: [],
+  uncategorizedCount: 0,
+  uncategorizedStatus: 'idle',
+  uncategorizedError: null,
+
+  categorizationRules: [],
+  rulesStatus: 'idle',
+  rulesError: null,
+
+  categorysuggestion: null,
+  suggestionStatus: 'idle',
+
+  bulkEditMode: false,
+  selectedTransactionIds: [],
+
   // Transactions
   latestTransactions: [],
   transactionsStatus: 'idle',
@@ -577,6 +887,11 @@ const initialState = {
 
   // Budget
   budget: null,
+  budgetStatus: 'idle',
+  budgetSaveStatus: 'idle',
+  // Budget
+  budget: null,
+  totalExpenses: 0, // Dedicated state for expense API
   budgetStatus: 'idle',
   budgetSaveStatus: 'idle',
   budgetError: null,
@@ -601,6 +916,11 @@ const initialState = {
   smsBatchProcessing: false,
   smsBatchResult: null,
   smsBatchError: null,
+
+  lastSmsCheck: null, // New field for debug timer
+
+  // Global Server Status
+  serverStatus: 'online', // 'online' | 'offline'
 };
 
 // =======================================================
@@ -630,9 +950,23 @@ const APISlice = createSlice({
     },
 
     clearSMSBatchResult: (state) => {
+      state.smsBatchProcessing = false;
+      state.smsBatchError = null;
+    },
+
+    setLastSmsCheck: (state, action) => {
+      state.lastSmsCheck = action.payload;
+    },
+
+    clearSMSBatchResult: (state) => {
       state.smsBatchResult = null;
       state.smsBatchError = null;
       state.smsBatchProcessing = false;
+    },
+
+    // Logout Action
+    logout: (state) => {
+      return initialState;
     }
   },
   extraReducers: (builder) => {
@@ -654,6 +988,19 @@ const APISlice = createSlice({
           { id: 1, source: 'bank', balance: 0 },
           { id: 2, source: 'wallet', balance: 0 }
         ]
+      })
+
+      // --- setManualBalance ---
+      .addCase(setManualBalance.pending, (state) => {
+        state.accountsStatus = 'loading';
+      })
+      .addCase(setManualBalance.fulfilled, (state, action) => {
+        state.accountsStatus = 'succeeded';
+        // Accounts will be refreshed by fetchUserAccounts dispatch
+      })
+      .addCase(setManualBalance.rejected, (state, action) => {
+        state.accountsStatus = 'failed';
+        state.accountsError = action.payload;
       })
 
       // --- fetchSavingsGoals ---
@@ -719,14 +1066,20 @@ const APISlice = createSlice({
       })
       .addCase(fetchCurrentSummary.fulfilled, (state, action) => {
         state.summaryStatus = 'succeeded';
+        console.log('API Slice: fetchCurrentSummary.fulfilled payload:', action.payload);
         state.currentSummary = action.payload;
       })
       .addCase(fetchCurrentSummary.rejected, (state, action) => {
         state.summaryStatus = 'failed';
         state.summaryError = action.payload;
         // Fallback
+        // Fallback
         state.currentSummary = {
-          actual: { income: 0, expense: 0, savings: 0 }
+          total_income: 0,
+          total_expense: 0,
+          total_savings: 0,
+          opening_balance: 0,
+          closing_balance: 0
         };
       })
 
@@ -752,6 +1105,7 @@ const APISlice = createSlice({
       })
       .addCase(calculateMonthlySummary.fulfilled, (state, action) => {
         state.status = 'succeeded';
+        state.currentSummary = action.payload; // Update with fresh data
         const { message } = action.payload;
         state.error = {
           type: 'success',
@@ -798,12 +1152,12 @@ const APISlice = createSlice({
         };
       })
       .addCase(saveBudget.rejected, (state, action) => {
-        state.budgetSaveStatus = 'error';
-        state.budgetError = {
-          type: 'error',
-          message: action.payload || 'Failed to save budget.'
-        };
+        state.budgetSaveStatus = 'failed';
+        state.budgetError = action.payload;
       })
+
+
+
 
       // --- fetchFourMonthHistory ---
       .addCase(fetchFourMonthHistory.pending, (state) => {
@@ -833,6 +1187,21 @@ const APISlice = createSlice({
       .addCase(fetchTrendHistory.rejected, (state, action) => {
         state.historyStatus = 'failed';
         state.historyError = action.payload;
+      })
+
+      // --- fetchTotalExpenses (NEW) ---
+      .addCase(fetchTotalExpenses.pending, (state) => {
+        // Optionally set a status
+      })
+      .addCase(fetchTotalExpenses.fulfilled, (state, action) => {
+        state.totalExpenses = action.payload.total_expense || 0;
+        console.log("✅ Total Expenses Updated:", state.totalExpenses);
+      })
+      .addCase(fetchTotalExpenses.rejected, (state, action) => {
+        console.error("❌ Failed to fetch total expenses:", action.payload);
+        // Do not zero it out blindly if we want persistence, 
+        // but user asked for real-time. 0 is safer than stale if error is authentic.
+        state.totalExpenses = 0;
       })
 
       // --- fetchLatestTransactions ---
@@ -922,6 +1291,26 @@ const APISlice = createSlice({
         state.authError = action.payload;
       })
 
+      // --- GOOGLE LOGIN ---
+      .addCase(loginWithGoogle.pending, (state) => {
+        state.authStatus = 'loading';
+        state.authError = null;
+      })
+      .addCase(loginWithGoogle.fulfilled, (state, action) => {
+        if (action.payload.otp_required) {
+          state.authStatus = 'otp_sent';
+        } else {
+          state.authStatus = 'authenticated';
+          state.token = action.payload.token;
+          state.user = action.payload.user;
+          state.error = null;
+        }
+      })
+      .addCase(loginWithGoogle.rejected, (state, action) => {
+        state.authStatus = 'failed';
+        state.authError = action.payload;
+      })
+
       // --- VERIFY OTP ---
       .addCase(verifyOtp.pending, (state) => {
         state.authStatus = 'loading';
@@ -957,6 +1346,20 @@ const APISlice = createSlice({
         state.smsTestError = action.payload;
       })
 
+      // --- FETCH FINANCIAL INSIGHT ---
+      .addCase(fetchFinancialInsight.pending, (state) => {
+        state.financialInsightStatus = 'loading';
+        state.financialInsight = null;
+      })
+      .addCase(fetchFinancialInsight.fulfilled, (state, action) => {
+        state.financialInsightStatus = 'succeeded';
+        state.financialInsight = action.payload?.data || null;
+      })
+      .addCase(fetchFinancialInsight.rejected, (state, action) => {
+        state.financialInsightStatus = 'failed';
+        state.financialInsight = null;
+      })
+
       // --- processBatchSMS ---
       .addCase(processBatchSMS.pending, (state) => {
         state.smsBatchProcessing = true;
@@ -976,7 +1379,134 @@ const APISlice = createSlice({
       .addCase(processBatchSMS.rejected, (state, action) => {
         state.smsBatchProcessing = false;
         state.smsBatchError = action.payload;
-      });
+      })
+
+      // --- calculatePreviousStatement ---
+      .addCase(calculatePreviousStatement.pending, (state) => {
+        state.statementStatus = 'loading';
+        state.statementResult = null;
+        state.statementError = null;
+      })
+      .addCase(calculatePreviousStatement.fulfilled, (state, action) => {
+        state.statementStatus = 'succeeded';
+        state.statementResult = action.payload;
+        // Mark transactions as needing refresh if any were added
+        if (action.payload.added_transactions > 0) {
+          state.transactionsStatus = 'idle';
+        }
+      })
+      .addCase(calculatePreviousStatement.rejected, (state, action) => {
+        state.statementStatus = 'failed';
+        state.statementError = action.payload;
+      })
+
+      // =======================================================
+      // TRANSACTION CATEGORIZATION REDUCERS (NEW)
+      // =======================================================
+
+      // Uncategorized Transactions
+      .addCase(fetchUncategorizedTransactions.pending, (state) => {
+        state.uncategorizedStatus = 'loading';
+      })
+      .addCase(fetchUncategorizedTransactions.fulfilled, (state, action) => {
+        state.uncategorizedStatus = 'succeeded';
+        state.uncategorizedTransactions = action.payload.transactions || [];
+        state.uncategorizedCount = action.payload.count || 0;
+        state.uncategorizedError = null;
+      })
+      .addCase(fetchUncategorizedTransactions.rejected, (state, action) => {
+        state.uncategorizedStatus = 'failed';
+        state.uncategorizedError = action.payload;
+      })
+
+      // Bulk Categorize
+      .addCase(bulkCategorizeTransactions.pending, (state) => {
+        state.uncategorizedStatus = 'updating';
+      })
+      .addCase(bulkCategorizeTransactions.fulfilled, (state, action) => {
+        state.uncategorizedStatus = 'succeeded';
+      })
+      .addCase(bulkCategorizeTransactions.rejected, (state, action) => {
+        state.uncategorizedStatus = 'failed';
+        state.uncategorizedError = action.payload;
+      })
+
+      // Category Suggestion
+      .addCase(getSuggestedCategory.pending, (state) => {
+        state.suggestionStatus = 'loading';
+      })
+      .addCase(getSuggestedCategory.fulfilled, (state, action) => {
+        state.suggestionStatus = 'succeeded';
+        state.categorysuggestion = action.payload;
+      })
+      .addCase(getSuggestedCategory.rejected, (state, action) => {
+        state.suggestionStatus = 'failed';
+        state.categorysuggestion = null;
+      })
+
+      // Categorization Rules
+      .addCase(fetchCategorizationRules.pending, (state) => {
+        state.rulesStatus = 'loading';
+      })
+      .addCase(fetchCategorizationRules.fulfilled, (state, action) => {
+        state.rulesStatus = 'succeeded';
+        state.categorizationRules = action.payload.rules || [];
+        state.rulesError = null;
+      })
+      .addCase(fetchCategorizationRules.rejected, (state, action) => {
+        state.rulesStatus = 'failed';
+        state.rulesError = action.payload;
+      })
+
+      // Create Rule
+      .addCase(createCategorizationRule.fulfilled, (state, action) => {
+        state.rulesStatus = 'succeeded';
+      })
+      .addCase(createCategorizationRule.rejected, (state, action) => {
+        state.rulesStatus = 'failed';
+        state.rulesError = action.payload;
+      })
+
+      // Delete Rule
+      .addCase(deleteCategorizationRule.fulfilled, (state, action) => {
+        state.rulesStatus = 'succeeded';
+      })
+      .addCase(deleteCategorizationRule.rejected, (state, action) => {
+        state.rulesStatus = 'failed';
+        state.rulesError = action.payload;
+      })
+
+      // =======================================================
+      // GLOBAL MATCHERS FOR SERVER STATUS
+      // =======================================================
+      .addMatcher(
+        (action) => action.type.endsWith('/rejected'),
+        (state, action) => {
+          const errorMsg = action.payload || action.error?.message;
+          // Check for common network error indicators
+          if (
+            errorMsg &&
+            (
+              typeof errorMsg === 'string' && (
+                errorMsg.includes('Network Error') ||
+                errorMsg.includes('Network request failed') ||
+                errorMsg.includes('timeout') ||
+                errorMsg.includes('50') // Catch 500, 502, 503 etc loosely if passed as string
+              )
+            )
+          ) {
+            state.serverStatus = 'offline';
+          }
+        }
+      )
+      .addMatcher(
+        (action) => action.type.endsWith('/fulfilled'),
+        (state) => {
+          if (state.serverStatus === 'offline') {
+            state.serverStatus = 'online';
+          }
+        }
+      );
   },
 });
 
@@ -984,7 +1514,9 @@ export const {
   clearBudgetSaveStatus,
   clearSMSResult,
   clearSMSTestResult,
-  clearSMSBatchResult
+  clearSMSBatchResult,
+  setLastSmsCheck,
+  logout
 } = APISlice.actions;
 
 export default APISlice.reducer;

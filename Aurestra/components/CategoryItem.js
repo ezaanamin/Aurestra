@@ -3,14 +3,17 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const CategoryItem = ({ name, icon }) => {
+  const { colors } = useSettings();
+
   return (
     <TouchableOpacity style={styles.container}>
-      <View style={styles.iconContainer}>
-        <Icon name={icon} size={36} color="#4299e1" />
+      <View style={[styles.iconContainer, { backgroundColor: colors.primary + '20' }]}>
+        <Icon name={icon} size={36} color={colors.primary} />
       </View>
-      <Text style={styles.name}>{name}</Text>
+      <Text style={[styles.name, { color: colors.text }]}>{name}</Text>
     </TouchableOpacity>
   );
 };
@@ -25,14 +28,12 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 15,
-    backgroundColor: '#ebf4ff', // Light blue background
     alignItems: 'center',
     justifyContent: 'center',
   },
   name: {
     marginTop: 10,
     fontSize: 14,
-    color: '#2d3748',
   },
 });
 

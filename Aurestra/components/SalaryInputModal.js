@@ -12,35 +12,30 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useDispatch } from 'react-redux';
+import { setSalary } from '../API/slice/API';
 import { API_BASE_URL } from '../API_URL';
+import { useSettings } from '../context/SettingsContext';
 
 const SalaryInputModal = ({ visible, onClose, onUpdate }) => {
     const [amount, setAmount] = useState('');
     const [loading, setLoading] = useState(false);
+    const { colors, isDarkMode } = useSettings();
+
+    const dispatch = useDispatch();
 
     const handleSave = async () => {
         if (!amount) return;
 
         setLoading(true);
         try {
-            const response = await fetch(`${API_BASE_URL}/api/set_salary`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ amount: parseFloat(amount) }),
-            });
+            await dispatch(setSalary(parseFloat(amount))).unwrap();
 
-            const data = await response.json();
-            if (response.ok) {
-                if (onUpdate) onUpdate();
-                onClose();
-                setAmount('');
-            } else {
-                alert("Error updating salary: " + data.error);
-            }
-        } catch (e) {
-            alert("Network error");
+            if (onUpdate) onUpdate();
+            onClose();
+            setAmount('');
+        } catch (error) {
+            alert("Error updating salary: " + error);
         } finally {
             setLoading(false);
         }
@@ -55,29 +50,29 @@ const SalaryInputModal = ({ visible, onClose, onUpdate }) => {
         >
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                style={styles.overlay}
+                style={[styles.overlay, { backgroundColor: colors.modalOverlay }]}
             >
                 <TouchableOpacity style={styles.backdrop} onPress={onClose} activeOpacity={1} />
 
                 <View style={styles.modalContainer}>
                     <LinearGradient
-                        colors={['#1F2937', '#111827']}
+                        colors={[colors.card, colors.card]}
                         style={styles.card}
                     >
                         <View style={styles.header}>
-                            <View style={[styles.iconContainer, { backgroundColor: '#10B981' }]}>
+                            <View style={[styles.iconContainer, { backgroundColor: colors.success }]}>
                                 <Icon name="cash-multiple" size={24} color="#FFF" />
                             </View>
-                            <Text style={styles.title}>Update Monthly Salary</Text>
-                            <Text style={styles.subtitle}>Set your target income for this month</Text>
+                            <Text style={[styles.title, { color: colors.text }]}>Update Monthly Salary</Text>
+                            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Set your target income for this month</Text>
                         </View>
 
-                        <View style={styles.inputContainer}>
-                            <Text style={styles.currencyPrefix}>Rs.</Text>
+                        <View style={[styles.inputContainer, { backgroundColor: colors.inputBackground || colors.background, borderColor: colors.border }]}>
+                            <Text style={[styles.currencyPrefix, { color: colors.textSecondary }]}>Rs.</Text>
                             <TextInput
-                                style={styles.input}
+                                style={[styles.input, { color: colors.text }]}
                                 placeholder="0.00"
-                                placeholderTextColor="#6B7280"
+                                placeholderTextColor={colors.textSecondary}
                                 keyboardType="numeric"
                                 value={amount}
                                 onChangeText={setAmount}
@@ -87,7 +82,7 @@ const SalaryInputModal = ({ visible, onClose, onUpdate }) => {
 
                         <View style={styles.actions}>
                             <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-                                <Text style={styles.cancelText}>Cancel</Text>
+                                <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
@@ -99,7 +94,7 @@ const SalaryInputModal = ({ visible, onClose, onUpdate }) => {
                                     <ActivityIndicator color="#FFF" size="small" />
                                 ) : (
                                     <LinearGradient
-                                        colors={['#10B981', '#059669']}
+                                        colors={[colors.primary, colors.primary]}
                                         style={styles.gradientBtn}
                                         start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                                     >
@@ -119,7 +114,6 @@ const SalaryInputModal = ({ visible, onClose, onUpdate }) => {
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -156,36 +150,30 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#F9FAFB',
         marginBottom: 4,
     },
     subtitle: {
         fontSize: 14,
-        color: '#9CA3AF',
         textAlign: 'center',
     },
     inputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#374151',
         borderRadius: 12,
         paddingHorizontal: 16,
         paddingVertical: 12,
         marginBottom: 24,
         borderWidth: 1,
-        borderColor: '#4B5563',
     },
     currencyPrefix: {
         fontSize: 20,
         fontWeight: '600',
-        color: '#9CA3AF',
         marginRight: 8,
     },
     input: {
         flex: 1,
         fontSize: 24,
         fontWeight: '600',
-        color: '#F9FAFB',
         padding: 0,
     },
     actions: {
@@ -197,11 +185,9 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         paddingHorizontal: 20,
         borderRadius: 10,
-        // backgroundColor: '#374151',
         marginRight: 10,
     },
     cancelText: {
-        color: '#9CA3AF',
         fontSize: 16,
         fontWeight: '600',
     },

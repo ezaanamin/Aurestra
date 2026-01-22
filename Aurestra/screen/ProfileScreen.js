@@ -11,14 +11,15 @@ import {
   Dimensions,
   Switch,
   Modal,
-  FlatList
+  FlatList,
+  Animated
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
 
-import { fetchUserProfile, registerDeviceToken } from '../API/slice/API';
+import { fetchUserProfile, registerDeviceToken, logout } from '../API/slice/API';
 import { API_BASE_URL } from '../API_URL';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -40,24 +41,44 @@ const ProfileScreen = ({ navigation }) => {
     updateLanguage,
     currency,
     updateCurrency,
-    t
+    t,
+    colors
   } = useSettings();
 
   const [langModalVisible, setLangModalVisible] = useState(false);
   const [currModalVisible, setCurrModalVisible] = useState(false);
+  const [timeRemaining, setTimeRemaining] = useState('');
 
-  console.log('ProfileScreen Render:', {
-    user,
-    settings: { language, currency, isDarkMode, notificationsEnabled }
-  });
+  const lastCheck = useSelector(state => state.API.lastSmsCheck);
 
   React.useEffect(() => {
     dispatch(fetchUserProfile());
   }, [dispatch]);
 
+  // Countdown Timer Logic
+  React.useEffect(() => {
+    if (!lastCheck) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const nextSync = lastCheck + (5 * 60 * 1000);
+      const diff = nextSync - now;
+
+      if (diff <= 0) {
+        setTimeRemaining('Syncing now...');
+      } else {
+        const minutes = Math.floor(diff / 60000);
+        const seconds = Math.floor((diff % 60000) / 1000);
+        setTimeRemaining(`${minutes}:${seconds < 10 ? '0' : ''}${seconds}`);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [lastCheck]);
+
   const handleLogout = async () => {
     await AsyncStorage.removeItem('userToken');
-    // Optional: dispatch(clearState())
+    dispatch(logout());
     navigation.reset({
       index: 0,
       routes: [{ name: 'Login' }],
@@ -77,18 +98,19 @@ const ProfileScreen = ({ navigation }) => {
 
   // User Stats
   const userStats = [
-    { label: t('transactions'), value: user?.stats?.transactions || '0', icon: 'swap-horizontal', color: '#3B82F6' },
-    { label: 'Categories', value: user?.stats?.categories || '0', icon: 'shape', color: '#8B5CF6' },
-    { label: 'Goals', value: user?.stats?.goals || '0', icon: 'target', color: '#10B981' },
+    { label: t('transactions'), value: user?.stats?.transactions || '0', icon: 'swap-horizontal', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
+    { label: 'Categories', value: user?.stats?.categories || '0', icon: 'shape', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
+    { label: 'Goals', value: user?.stats?.goals || '0', icon: 'target', color: '#10B981', gradient: ['#10B981', '#059669'] },
   ];
 
-  // Menu Sections
+  // Menu Sections with enhanced icons
   const accountMenuItems = [
-    { icon: 'account-edit', label: t('editProfile'), screen: 'EditProfile', color: '#3B82F6' },
-    { icon: 'wallet', label: t('paymentMethods'), screen: 'PaymentMethods', color: '#8B5CF6' },
-    { icon: 'bank', label: t('linkedAccounts'), screen: 'LinkedAccounts', color: '#10B981' },
-    { icon: 'shape', label: 'Categories', screen: 'CategoryManagement', color: '#8B5CF6' },
-    { icon: 'file-document', label: t('transactionHistory'), screen: 'FullHistory', color: '#F59E0B' },
+    { icon: 'account-edit', label: t('editProfile'), screen: 'EditProfile', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
+    { icon: 'wallet', label: t('paymentMethods'), screen: 'PaymentMethods', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
+    { icon: 'bank', label: t('linkedAccounts'), screen: 'LinkedAccounts', color: '#10B981', gradient: ['#10B981', '#059669'] },
+    { icon: 'shape', label: 'Categories', screen: 'CategoryManagement', color: '#EC4899', gradient: ['#EC4899', '#DB2777'] },
+    { icon: 'brain', label: 'Financial Memories', screen: 'FinancialInsights', color: '#F59E0B', gradient: ['#F59E0B', '#D97706'] },
+    { icon: 'file-document', label: t('transactionHistory'), screen: 'FullHistory', color: '#06B6D4', gradient: ['#06B6D4', '#0891B2'] },
   ];
 
   const preferencesMenuItems = [
@@ -100,11 +122,11 @@ const ProfileScreen = ({ navigation }) => {
       setter: (val) => {
         toggleNotifications(val);
         if (val) {
-          // If enabling notifications, ensure device is registered
           registerTokenIfAvailable();
         }
       },
-      color: '#EF4444'
+      color: '#EF4444',
+      gradient: ['#EF4444', '#DC2626']
     },
     {
       icon: 'theme-light-dark',
@@ -112,59 +134,66 @@ const ProfileScreen = ({ navigation }) => {
       toggle: true,
       value: isDarkMode,
       setter: (val) => updateTheme(val ? 'dark' : 'light'),
-      color: '#64748B'
+      color: '#64748B',
+      gradient: ['#64748B', '#475569']
     },
     {
       icon: 'translate',
       label: t('language'),
       subtitle: language,
-      action: () => setLangModalVisible(true), // Open Modal
-      color: '#3B82F6'
+      action: () => setLangModalVisible(true),
+      color: '#3B82F6',
+      gradient: ['#3B82F6', '#2563EB']
     },
     {
       icon: 'currency-usd',
       label: t('currency'),
       subtitle: currency,
-      action: () => setCurrModalVisible(true), // Open Modal
-      color: '#10B981'
+      action: () => setCurrModalVisible(true),
+      color: '#10B981',
+      gradient: ['#10B981', '#059669']
     },
   ];
 
   const supportMenuItems = [
-    { icon: 'help-circle', label: t('helpCenter'), color: '#3B82F6' },
-    { icon: 'information', label: t('about'), color: '#8B5CF6' },
-    { icon: 'shield-check', label: t('privacyPolicy'), color: '#10B981' },
-    { icon: 'file-document-outline', label: t('termsOfService'), color: '#F59E0B' },
+    { icon: 'help-circle', label: t('helpCenter'), color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
+    { icon: 'information', label: t('about'), color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
+    { icon: 'shield-check', label: t('privacyPolicy'), color: '#10B981', gradient: ['#10B981', '#059669'] },
+    { icon: 'file-document-outline', label: t('termsOfService'), color: '#F59E0B', gradient: ['#F59E0B', '#D97706'] },
   ];
 
   const isScreenActive = (screenName) => {
     return screenName === 'Profile';
   };
 
-  const themeStyles = {
-    container: isDarkMode ? '#0F172A' : '#F8FAFC',
-    text: isDarkMode ? '#F1F5F9' : '#1E293B',
-    cardBg: isDarkMode ? '#1E293B' : '#FFFFFF',
-    headerGradient: isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155'],
-    sectionHeader: isDarkMode ? '#94A3B8' : '#64748B',
-    border: isDarkMode ? '#334155' : '#E2E8F0'
-  };
-
   const renderMenuItem = (item, index, isLastItem) => {
     if (item.toggle) {
       return (
-        <View key={index} style={[styles.menuItem, isLastItem && styles.menuItemLast, { borderBottomColor: themeStyles.border }]}>
-          <View style={[styles.menuIconWrapper, { backgroundColor: item.color + '20' }]}>
-            <Icon name={item.icon} size={22} color={item.color} />
+        <View 
+          key={index} 
+          style={[
+            styles.menuItem, 
+            isLastItem && styles.menuItemLast, 
+            { borderBottomColor: colors.border }
+          ]}
+        >
+          <View style={styles.menuIconContainer}>
+            <LinearGradient
+              colors={item.gradient}
+              style={styles.menuIconWrapper}
+            >
+              <Icon name={item.icon} size={22} color="#FFFFFF" />
+            </LinearGradient>
           </View>
           <View style={styles.menuTextContainer}>
-            <Text style={[styles.menuLabel, { color: themeStyles.text }]}>{item.label}</Text>
+            <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
           </View>
           <Switch
             value={item.value}
             onValueChange={item.setter}
             trackColor={{ false: isDarkMode ? '#334155' : '#E2E8F0', true: item.color + '40' }}
             thumbColor={item.value ? item.color : '#FFFFFF'}
+            ios_backgroundColor={isDarkMode ? '#334155' : '#E2E8F0'}
           />
         </View>
       );
@@ -173,17 +202,31 @@ const ProfileScreen = ({ navigation }) => {
     return (
       <TouchableOpacity
         key={index}
-        style={[styles.menuItem, isLastItem && styles.menuItemLast, { borderBottomColor: themeStyles.border }]}
+        style={[
+          styles.menuItem, 
+          isLastItem && styles.menuItemLast, 
+          { borderBottomColor: colors.border }
+        ]}
         onPress={() => item.action ? item.action() : (item.screen && navigation.navigate(item.screen))}
+        activeOpacity={0.7}
       >
-        <View style={[styles.menuIconWrapper, { backgroundColor: item.color + '20' }]}>
-          <Icon name={item.icon} size={22} color={item.color} />
+        <View style={styles.menuIconContainer}>
+          <LinearGradient
+            colors={item.gradient}
+            style={styles.menuIconWrapper}
+          >
+            <Icon name={item.icon} size={22} color="#FFFFFF" />
+          </LinearGradient>
         </View>
         <View style={styles.menuTextContainer}>
-          <Text style={[styles.menuLabel, { color: themeStyles.text }]}>{item.label}</Text>
-          {item.subtitle && <Text style={styles.menuSubtitle}>{item.subtitle}</Text>}
+          <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+          {item.subtitle && (
+            <Text style={[styles.menuSubtitle, { color: colors.textSecondary }]}>
+              {item.subtitle}
+            </Text>
+          )}
         </View>
-        <Icon name="chevron-right" size={20} color="#94A3B8" />
+        <Icon name="chevron-right" size={22} color={colors.textSecondary} />
       </TouchableOpacity>
     );
   };
@@ -191,23 +234,40 @@ const ProfileScreen = ({ navigation }) => {
   const SelectionModal = ({ visible, onClose, title, data, onSelect, current }) => (
     <Modal animationType="slide" transparent={true} visible={visible} onRequestClose={onClose}>
       <TouchableOpacity activeOpacity={1} onPress={onClose} style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { backgroundColor: themeStyles.cardBg }]}>
+        <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
           <View style={styles.modalHeader}>
-            <Text style={[styles.modalTitle, { color: themeStyles.text }]}>{title}</Text>
-            <TouchableOpacity onPress={onClose}>
-              <Icon name="close" size={24} color="#64748B" />
+            <View>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>{title}</Text>
+              <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
+                Choose your preferred option
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
+              <Icon name="close" size={24} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
           <FlatList
             data={data}
             keyExtractor={(item) => item}
-            renderItem={({ item }) => (
+            renderItem={({ item, index }) => (
               <TouchableOpacity
-                style={[styles.modalItem, { borderBottomColor: themeStyles.border }]}
+                style={[
+                  styles.modalItem, 
+                  { borderBottomColor: colors.border },
+                  index === data.length - 1 && styles.modalItemLast
+                ]}
                 onPress={() => { onSelect(item); onClose(); }}
+                activeOpacity={0.7}
               >
-                <Text style={[styles.modalItemText, { color: themeStyles.text }]}>{item}</Text>
-                {current === item && <Icon name="check" size={20} color="#3B82F6" />}
+                <View style={styles.modalItemContent}>
+                  <Text style={[styles.modalItemText, { color: colors.text }]}>{item}</Text>
+                  {current === item && (
+                    <View style={styles.selectedBadge}>
+                      <Text style={styles.selectedBadgeText}>Current</Text>
+                    </View>
+                  )}
+                </View>
+                {current === item && <Icon name="check-circle" size={24} color="#10B981" />}
               </TouchableOpacity>
             )}
           />
@@ -217,55 +277,102 @@ const ProfileScreen = ({ navigation }) => {
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: themeStyles.container }]}>
-      <StatusBar barStyle="light-content" backgroundColor={themeStyles.headerGradient[0]} />
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar 
+        barStyle="light-content" 
+        backgroundColor={isDarkMode ? '#0F172A' : '#1E293B'} 
+      />
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Header with Gradient */}
-        <LinearGradient colors={themeStyles.headerGradient} style={styles.header}>
+      <ScrollView 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* Enhanced Header with Gradient */}
+        <LinearGradient 
+          colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']} 
+          style={styles.header}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        >
+          {/* Header Navigation */}
           <View style={styles.headerContent}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
               <Icon name="arrow-left" size={24} color="#FFFFFF" />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>{t('profile')}</Text>
-            <TouchableOpacity style={styles.settingsButton}>
+            <TouchableOpacity 
+              style={styles.settingsButton}
+              onPress={() => navigation.navigate('EditProfile')}
+            >
               <Icon name="cog" size={24} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
 
-          {/* Profile Card */}
+          {/* Enhanced Profile Card */}
           <View style={styles.profileCard}>
             <View style={styles.profileImageWrapper}>
-              <Image
-                source={{
-                  uri: user?.avatar_url
-                    ? (user.avatar_url.startsWith('http') ? user.avatar_url : `${API_BASE_URL}${user.avatar_url}`)
-                    : 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png'
-                }}
-                style={styles.profileImage}
-              />
-              <TouchableOpacity style={styles.editImageButton} onPress={() => navigation.navigate('EditProfile')}>
-                <Icon name="pencil" size={16} color="#FFFFFF" />
+              <LinearGradient
+                colors={['#3B82F6', '#8B5CF6']}
+                style={styles.profileImageBorder}
+              >
+                <Image
+                  source={{
+                    uri: user?.avatar_url
+                      ? (user.avatar_url.startsWith('http') ? user.avatar_url : `${API_BASE_URL}${user.avatar_url}`)
+                      : 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png'
+                  }}
+                  style={styles.profileImage}
+                />
+              </LinearGradient>
+              <TouchableOpacity 
+                style={styles.editImageButton} 
+                onPress={() => navigation.navigate('EditProfile')}
+              >
+                <LinearGradient
+                  colors={['#3B82F6', '#2563EB']}
+                  style={styles.editImageGradient}
+                >
+                  <Icon name="camera" size={18} color="#FFFFFF" />
+                </LinearGradient>
               </TouchableOpacity>
             </View>
             <Text style={styles.profileName}>{user?.full_name || 'User'}</Text>
             <Text style={styles.profileEmail}>{user?.email || 'user@example.com'}</Text>
             <View style={styles.verifiedBadge}>
-              <Icon name="check-decagram" size={16} color="#10B981" />
-              <Text style={styles.verifiedText}>{t('verifiedAccount')}</Text>
+              <LinearGradient
+                colors={['rgba(16, 185, 129, 0.2)', 'rgba(16, 185, 129, 0.1)']}
+                style={styles.verifiedBadgeGradient}
+              >
+                <Icon name="check-decagram" size={16} color="#10B981" />
+                <Text style={styles.verifiedText}>{t('verifiedAccount')}</Text>
+              </LinearGradient>
             </View>
           </View>
 
-          {/* Stats Cards */}
+          {/* Enhanced Stats Cards */}
           <View style={styles.statsContainer}>
             {userStats.map((stat, index) => (
-              <View key={index} style={styles.statCard}>
-                <View style={[styles.statIconWrapper, { backgroundColor: stat.color + '20' }]}>
-                  <Icon name={stat.icon} size={20} color={stat.color} />
-                </View>
-                <Text style={styles.statValue}>{stat.value}</Text>
-                <Text style={styles.statLabel}>{stat.label}</Text>
-              </View>
+              <TouchableOpacity 
+                key={index} 
+                style={styles.statCard}
+                activeOpacity={0.8}
+              >
+                <LinearGradient
+                  colors={[stat.color + '15', stat.color + '08']}
+                  style={styles.statCardGradient}
+                >
+                  <View style={styles.statIconWrapper}>
+                    <LinearGradient
+                      colors={stat.gradient}
+                      style={styles.statIconGradient}
+                    >
+                      <Icon name={stat.icon} size={22} color="#FFFFFF" />
+                    </LinearGradient>
+                  </View>
+                  <Text style={[styles.statValue, { color: colors.text }]}>{stat.value}</Text>
+                  <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{stat.label}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
             ))}
           </View>
         </LinearGradient>
@@ -274,10 +381,19 @@ const ProfileScreen = ({ navigation }) => {
         <View style={styles.content}>
           {/* Account Section */}
           <View style={styles.sectionHeader}>
-            <Icon name="account-circle" size={20} color={themeStyles.sectionHeader} />
-            <Text style={[styles.sectionTitle, { color: themeStyles.sectionHeader }]}>{t('account')}</Text>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={styles.sectionIconWrapper}>
+                <LinearGradient
+                  colors={['#3B82F6', '#2563EB']}
+                  style={styles.sectionIconGradient}
+                >
+                  <Icon name="account-circle" size={18} color="#FFFFFF" />
+                </LinearGradient>
+              </View>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('account')}</Text>
+            </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border }]}>
+          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {accountMenuItems.map((item, index) =>
               renderMenuItem(item, index, index === accountMenuItems.length - 1)
             )}
@@ -285,10 +401,19 @@ const ProfileScreen = ({ navigation }) => {
 
           {/* Preferences Section */}
           <View style={styles.sectionHeader}>
-            <Icon name="tune" size={20} color={themeStyles.sectionHeader} />
-            <Text style={[styles.sectionTitle, { color: themeStyles.sectionHeader }]}>{t('preferences')}</Text>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={styles.sectionIconWrapper}>
+                <LinearGradient
+                  colors={['#8B5CF6', '#7C3AED']}
+                  style={styles.sectionIconGradient}
+                >
+                  <Icon name="tune" size={18} color="#FFFFFF" />
+                </LinearGradient>
+              </View>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('preferences')}</Text>
+            </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border }]}>
+          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {preferencesMenuItems.map((item, index) =>
               renderMenuItem(item, index, index === preferencesMenuItems.length - 1)
             )}
@@ -296,32 +421,70 @@ const ProfileScreen = ({ navigation }) => {
 
           {/* Support Section */}
           <View style={styles.sectionHeader}>
-            <Icon name="lifebuoy" size={20} color={themeStyles.sectionHeader} />
-            <Text style={[styles.sectionTitle, { color: themeStyles.sectionHeader }]}>{t('support')}</Text>
+            <View style={styles.sectionHeaderLeft}>
+              <View style={styles.sectionIconWrapper}>
+                <LinearGradient
+                  colors={['#10B981', '#059669']}
+                  style={styles.sectionIconGradient}
+                >
+                  <Icon name="lifebuoy" size={18} color="#FFFFFF" />
+                </LinearGradient>
+              </View>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('support')}</Text>
+            </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border }]}>
+          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {supportMenuItems.map((item, index) =>
               renderMenuItem(item, index, index === supportMenuItems.length - 1)
             )}
           </View>
 
-          {/* Logout Button */}
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          {/* Enhanced Logout Button */}
+          <TouchableOpacity 
+            style={styles.logoutButton} 
+            onPress={handleLogout}
+            activeOpacity={0.8}
+          >
             <LinearGradient
               colors={['#EF4444', '#DC2626']}
               style={styles.logoutGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
             >
-              <Icon name="logout" size={20} color="#FFFFFF" />
+              <Icon name="logout" size={22} color="#FFFFFF" />
               <Text style={styles.logoutText}>{t('logout')}</Text>
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* App Version */}
-          <Text style={styles.versionText}>Version 1.1.0</Text>
+          {/* Enhanced App Info */}
+          <View style={styles.appInfoContainer}>
+            <View style={styles.versionBadge}>
+              <Icon name="information-outline" size={16} color={colors.textSecondary} />
+              <Text style={[styles.versionText, { color: colors.textSecondary }]}>
+                Version 1.1.0
+              </Text>
+            </View>
+            {lastCheck && (
+              <View style={styles.syncInfoContainer}>
+                <View style={styles.syncInfoRow}>
+                  <Icon name="sync" size={14} color={colors.textSecondary} />
+                  <Text style={[styles.syncInfoText, { color: colors.textSecondary }]}>
+                    Last SMS Sync: {new Date(lastCheck).toLocaleTimeString()}
+                  </Text>
+                </View>
+                <View style={styles.nextSyncBadge}>
+                  <Icon name="clock-outline" size={14} color="#3B82F6" />
+                  <Text style={styles.nextSyncText}>
+                    Next: {timeRemaining || 'Calculating...'}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
         </View>
       </ScrollView>
 
-      {/* Modals */}
+      {/* Enhanced Modals */}
       <SelectionModal
         visible={langModalVisible}
         onClose={() => setLangModalVisible(false)}
@@ -339,20 +502,30 @@ const ProfileScreen = ({ navigation }) => {
         current={currency}
       />
 
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
+      {/* Enhanced Bottom Navigation */}
+      <View style={[styles.bottomNav, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Home')}
+          activeOpacity={0.7}
         >
-          <View style={[styles.navIconWrapper, isScreenActive('Home') && styles.navIconActive]}>
+          {isScreenActive('Home') && (
+            <LinearGradient
+              colors={['#3B82F6', '#2563EB']}
+              style={styles.navIconActive}
+            />
+          )}
+          <View style={[styles.navIconWrapper, isScreenActive('Home') && { zIndex: 1 }]}>
             <Icon
               name="home"
               size={24}
-              color={isScreenActive('Home') ? '#FFFFFF' : '#94A3B8'}
+              color={isScreenActive('Home') ? '#FFFFFF' : colors.textSecondary}
             />
           </View>
-          <Text style={[styles.navLabel, isScreenActive('Home') && styles.navLabelActive]}>
+          <Text style={[
+            styles.navLabel, 
+            { color: isScreenActive('Home') ? '#3B82F6' : colors.textSecondary }
+          ]}>
             {t('home')}
           </Text>
         </TouchableOpacity>
@@ -360,15 +533,25 @@ const ProfileScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Budget')}
+          activeOpacity={0.7}
         >
-          <View style={[styles.navIconWrapper, isScreenActive('Budget') && styles.navIconActive]}>
+          {isScreenActive('Budget') && (
+            <LinearGradient
+              colors={['#3B82F6', '#2563EB']}
+              style={styles.navIconActive}
+            />
+          )}
+          <View style={[styles.navIconWrapper, isScreenActive('Budget') && { zIndex: 1 }]}>
             <Icon
               name="chart-bar"
               size={24}
-              color={isScreenActive('Budget') ? '#FFFFFF' : '#94A3B8'}
+              color={isScreenActive('Budget') ? '#FFFFFF' : colors.textSecondary}
             />
           </View>
-          <Text style={[styles.navLabel, isScreenActive('Budget') && styles.navLabelActive]}>
+          <Text style={[
+            styles.navLabel, 
+            { color: isScreenActive('Budget') ? '#3B82F6' : colors.textSecondary }
+          ]}>
             {t('budget')}
           </Text>
         </TouchableOpacity>
@@ -376,15 +559,25 @@ const ProfileScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Transaction')}
+          activeOpacity={0.7}
         >
-          <View style={[styles.navIconWrapper, isScreenActive('Transaction') && styles.navIconActive]}>
+          {isScreenActive('Transaction') && (
+            <LinearGradient
+              colors={['#3B82F6', '#2563EB']}
+              style={styles.navIconActive}
+            />
+          )}
+          <View style={[styles.navIconWrapper, isScreenActive('Transaction') && { zIndex: 1 }]}>
             <Icon
               name="swap-horizontal"
               size={24}
-              color={isScreenActive('Transaction') ? '#FFFFFF' : '#94A3B8'}
+              color={isScreenActive('Transaction') ? '#FFFFFF' : colors.textSecondary}
             />
           </View>
-          <Text style={[styles.navLabel, isScreenActive('Transaction') && styles.navLabelActive]}>
+          <Text style={[
+            styles.navLabel, 
+            { color: isScreenActive('Transaction') ? '#3B82F6' : colors.textSecondary }
+          ]}>
             {t('transactions')}
           </Text>
         </TouchableOpacity>
@@ -392,15 +585,25 @@ const ProfileScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Saving')}
+          activeOpacity={0.7}
         >
-          <View style={[styles.navIconWrapper, isScreenActive('Saving') && styles.navIconActive]}>
+          {isScreenActive('Saving') && (
+            <LinearGradient
+              colors={['#3B82F6', '#2563EB']}
+              style={styles.navIconActive}
+            />
+          )}
+          <View style={[styles.navIconWrapper, isScreenActive('Saving') && { zIndex: 1 }]}>
             <Icon
               name="piggy-bank"
               size={24}
-              color={isScreenActive('Saving') ? '#FFFFFF' : '#94A3B8'}
+              color={isScreenActive('Saving') ? '#FFFFFF' : colors.textSecondary}
             />
           </View>
-          <Text style={[styles.navLabel, isScreenActive('Saving') && styles.navLabelActive]}>
+          <Text style={[
+            styles.navLabel, 
+            { color: isScreenActive('Saving') ? '#3B82F6' : colors.textSecondary }
+          ]}>
             {t('savings')}
           </Text>
         </TouchableOpacity>
@@ -408,15 +611,25 @@ const ProfileScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Profile')}
+          activeOpacity={0.7}
         >
-          <View style={[styles.navIconWrapper, isScreenActive('Profile') && styles.navIconActive]}>
+          {isScreenActive('Profile') && (
+            <LinearGradient
+              colors={['#3B82F6', '#2563EB']}
+              style={styles.navIconActive}
+            />
+          )}
+          <View style={[styles.navIconWrapper, isScreenActive('Profile') && { zIndex: 1 }]}>
             <Icon
               name="account-circle"
               size={24}
-              color={isScreenActive('Profile') ? '#FFFFFF' : '#94A3B8'}
+              color={isScreenActive('Profile') ? '#FFFFFF' : colors.textSecondary}
             />
           </View>
-          <Text style={[styles.navLabel, isScreenActive('Profile') && styles.navLabelActive]}>
+          <Text style={[
+            styles.navLabel, 
+            { color: isScreenActive('Profile') ? '#3B82F6' : colors.textSecondary }
+          ]}>
             {t('profile')}
           </Text>
         </TouchableOpacity>
@@ -429,10 +642,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  scrollContent: {
+    paddingBottom: 100,
+  },
   header: {
     paddingBottom: 24,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
   headerContent: {
     flexDirection: 'row',
@@ -443,15 +664,26 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   backButton: {
-    padding: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    letterSpacing: -0.5,
   },
   settingsButton: {
-    padding: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   profileCard: {
     alignItems: 'center',
@@ -462,45 +694,56 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 16,
   },
+  profileImageBorder: {
+    padding: 4,
+    borderRadius: 62,
+  },
   profileImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     borderWidth: 4,
-    borderColor: '#FFFFFF',
+    borderColor: '#1E293B',
   },
   editImageButton: {
     position: 'absolute',
     bottom: 0,
     right: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#3B82F6',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  editImageGradient: {
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#334155',
+    borderColor: '#1E293B',
+    borderRadius: 20,
   },
   profileName: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: 'bold',
     color: '#FFFFFF',
     marginBottom: 4,
+    letterSpacing: -0.5,
   },
   profileEmail: {
     fontSize: 14,
     color: '#94A3B8',
     marginBottom: 12,
+    fontWeight: '500',
   },
   verifiedBadge: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  verifiedBadgeGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderWidth: 1,
     borderColor: 'rgba(16, 185, 129, 0.3)',
   },
@@ -508,6 +751,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6EE7B7',
     fontWeight: '600',
+    letterSpacing: 0.3,
   },
   statsContainer: {
     flexDirection: 'row',
@@ -517,53 +761,78 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 16,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  statCardGradient: {
     padding: 16,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 20,
   },
   statIconWrapper: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    marginBottom: 10,
+    borderRadius: 22,
+    overflow: 'hidden',
+  },
+  statIconGradient: {
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: 'bold',
-    color: '#FFFFFF',
     marginBottom: 2,
+    letterSpacing: -0.5,
   },
   statLabel: {
-    fontSize: 12,
-    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   content: {
     padding: 20,
-    paddingBottom: 100,
   },
   sectionHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8,
     marginTop: 8,
     marginBottom: 12,
   },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sectionIconWrapper: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  sectionIconGradient: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: -0.3,
   },
   menuSection: {
-    borderRadius: 16,
+    borderRadius: 20,
     marginBottom: 16,
     borderWidth: 1,
     overflow: 'hidden',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
   },
   menuItem: {
     flexDirection: 'row',
@@ -574,13 +843,15 @@ const styles = StyleSheet.create({
   menuItemLast: {
     borderBottomWidth: 0,
   },
+  menuIconContainer: {
+    marginRight: 14,
+  },
   menuIconWrapper: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
   menuTextContainer: {
     flex: 1,
@@ -588,34 +859,80 @@ const styles = StyleSheet.create({
   menuLabel: {
     fontSize: 15,
     fontWeight: '600',
+    letterSpacing: -0.2,
   },
   menuSubtitle: {
     fontSize: 13,
-    color: '#64748B',
     marginTop: 2,
+    fontWeight: '500',
   },
   logoutButton: {
     marginTop: 8,
-    borderRadius: 16,
+    borderRadius: 20,
     overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
   logoutGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    gap: 8,
+    paddingVertical: 18,
+    gap: 10,
   },
   logoutText: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  appInfoContainer: {
+    alignItems: 'center',
+    marginTop: 32,
+    gap: 12,
+  },
+  versionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(148, 163, 184, 0.1)',
+    borderRadius: 12,
   },
   versionText: {
     fontSize: 12,
-    color: '#94A3B8',
-    textAlign: 'center',
-    marginTop: 24,
+    fontWeight: '500',
+  },
+  syncInfoContainer: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  syncInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  syncInfoText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  nextSyncBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  nextSyncText: {
+    fontSize: 11,
+    color: '#3B82F6',
+    fontWeight: 'bold',
   },
   bottomNav: {
     position: 'absolute',
@@ -624,63 +941,102 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
   },
   navItem: {
     alignItems: 'center',
     gap: 4,
+    position: 'relative',
   },
   navIconWrapper: {
     padding: 8,
     borderRadius: 16,
   },
   navIconActive: {
-    backgroundColor: '#3B82F6',
+    position: 'absolute',
+    top: 0,
+    left: '50%',
+    marginLeft: -24,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
   navLabel: {
     fontSize: 11,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  navLabelActive: {
-    color: '#3B82F6',
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    minHeight: 300,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    maxHeight: '70%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
+    alignItems: 'flex-start',
+    marginBottom: 24,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
+    marginBottom: 4,
+    letterSpacing: -0.5,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  modalCloseButton: {
+    padding: 4,
   },
   modalItem: {
     paddingVertical: 16,
     borderBottomWidth: 1,
     flexDirection: 'row',
-    justifyContent: 'space-between'
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalItemLast: {
+    borderBottomWidth: 0,
+  },
+  modalItemContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   modalItemText: {
     fontSize: 16,
-    fontWeight: '500'
-  }
+    fontWeight: '500',
+    letterSpacing: -0.2,
+  },
+  selectedBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  selectedBadgeText: {
+    fontSize: 10,
+    color: '#10B981',
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
 });
 
 export default ProfileScreen;

@@ -11,18 +11,20 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const PaymentMethodsScreen = ({ navigation }) => {
+    const { colors, isDarkMode } = useSettings();
     const methods = [
         { id: '1', type: 'Bank Account', name: 'Bank Al Habib', number: '**** 0981', icon: 'bank', color: '#10B981' },
         { id: '2', type: 'Debit Card', name: 'Visa Gold', number: '**** 4242', icon: 'credit-card', color: '#3B82F6' },
     ];
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+            <StatusBar barStyle="light-content" backgroundColor={colors.headerBackground} />
 
-            <LinearGradient colors={['#1E293B', '#334155']} style={styles.header}>
+            <LinearGradient colors={isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155']} style={styles.header}>
                 <View style={styles.headerContent}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                         <Icon name="arrow-left" size={24} color="#FFFFFF" />
@@ -36,15 +38,15 @@ const PaymentMethodsScreen = ({ navigation }) => {
 
             <ScrollView contentContainerStyle={styles.content}>
                 {methods.map((item) => (
-                    <TouchableOpacity key={item.id} style={styles.card}>
+                    <TouchableOpacity key={item.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
                         <View style={[styles.iconWrapper, { backgroundColor: item.color + '20' }]}>
                             <Icon name={item.icon} size={24} color={item.color} />
                         </View>
                         <View style={styles.cardInfo}>
-                            <Text style={styles.cardName}>{item.name}</Text>
-                            <Text style={styles.cardNumber}>{item.number}</Text>
+                            <Text style={[styles.cardName, { color: colors.text }]}>{item.name}</Text>
+                            <Text style={[styles.cardNumber, { color: colors.textSecondary }]}>{item.number}</Text>
                         </View>
-                        <Icon name="dots-vertical" size={20} color="#94A3B8" />
+                        <Icon name="dots-vertical" size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
                 ))}
             </ScrollView>

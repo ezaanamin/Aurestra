@@ -2,16 +2,19 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const AnalysisChart = () => {
+  const { colors } = useSettings();
+
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, { backgroundColor: colors.card }]}>
       {/* Chart Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Income & Expenses</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Income & Expenses</Text>
         <View style={styles.iconGroup}>
-          <Icon name="magnify" size={24} color="#a0aec0" style={styles.icon} />
-          <Icon name="calendar-month-outline" size={24} color="#a0aec0" />
+          <Icon name="magnify" size={24} color={colors.icon} style={styles.icon} />
+          <Icon name="calendar-month-outline" size={24} color={colors.icon} />
         </View>
       </View>
 
@@ -19,71 +22,54 @@ const AnalysisChart = () => {
       <View style={styles.chartArea}>
         {/* Y-Axis Labels */}
         <View style={styles.yAxis}>
-          <Text style={styles.yAxisLabel}>15k</Text>
-          <Text style={styles.yAxisLabel}>10k</Text>
-          <Text style={styles.yAxisLabel}>5k</Text>
-          <Text style={styles.yAxisLabel}>1k</Text>
+          {['15k', '10k', '5k', '1k'].map(label => (
+            <Text key={label} style={[styles.yAxisLabel, { color: colors.textSecondary }]}>{label}</Text>
+          ))}
         </View>
 
         {/* Chart Bars (representing daily data) */}
-        <View style={styles.chart}>
+        <View style={[styles.chart, { borderColor: colors.border }]}>
           {/* Each View below represents a day's bar */}
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '30%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '50%' }]} />
-            <Text style={styles.xAxisLabel}>Mon</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '10%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '20%' }]} />
-            <Text style={styles.xAxisLabel}>Tue</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '40%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '15%' }]} />
-            <Text style={styles.xAxisLabel}>Wed</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '20%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '60%' }]} />
-            <Text style={styles.xAxisLabel}>Thu</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '5%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '10%' }]} />
-            <Text style={styles.xAxisLabel}>Fri</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '3%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '5%' }]} />
-            <Text style={styles.xAxisLabel}>Sat</Text>
-          </View>
-          <View style={styles.barContainer}>
-            <View style={[styles.bar, styles.blueBar, { height: '15%' }]} />
-            <View style={[styles.bar, styles.greenBar, { height: '30%' }]} />
-            <Text style={styles.xAxisLabel}>Sun</Text>
-          </View>
+          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => {
+            // Mock heights for simplicity or passed props
+            const heights = [
+              { blue: '30%', green: '50%' },
+              { blue: '10%', green: '20%' },
+              { blue: '40%', green: '15%' },
+              { blue: '20%', green: '60%' },
+              { blue: '5%', green: '10%' },
+              { blue: '3%', green: '5%' },
+              { blue: '15%', green: '30%' },
+            ];
+            return (
+              <View key={day} style={styles.barContainer}>
+                <View style={[styles.bar, styles.blueBar, { height: heights[index].blue, backgroundColor: colors.primary }]} />
+                <View style={[styles.bar, styles.greenBar, { height: heights[index].green, backgroundColor: colors.secondary }]} />
+                <Text style={[styles.xAxisLabel, { color: colors.textSecondary }]}>{day}</Text>
+              </View>
+            );
+          })}
         </View>
       </View>
 
       {/* Income and Expense Totals */}
       <View style={styles.totalsContainer}>
         <View style={styles.totalItem}>
-          <View style={styles.totalIcon}>
-            <Icon name="arrow-up" size={16} color="#4299e1" />
+          <View style={[styles.totalIcon, { backgroundColor: colors.primary + '20' }]}>
+            <Icon name="arrow-up" size={16} color={colors.primary} />
           </View>
           <View style={styles.totalTextContainer}>
-            <Text style={styles.totalLabel}>Income</Text>
-            <Text style={styles.totalAmount}>$4,120.00</Text>
+            <Text style={[styles.totalLabel, { color: colors.textSecondary }]}>Income</Text>
+            <Text style={[styles.totalAmount, { color: colors.text }]}>$4,120.00</Text>
           </View>
         </View>
         <View style={styles.totalItem}>
-          <View style={styles.totalIcon}>
-            <Icon name="arrow-down" size={16} color="#34d399" />
+          <View style={[styles.totalIcon, { backgroundColor: colors.secondary + '20' }]}>
+            <Icon name="arrow-down" size={16} color={colors.secondary} />
           </View>
           <View style={styles.totalTextContainer}>
-            <Text style={styles.totalLabel}>Expense</Text>
-            <Text style={styles.totalAmount}>$1,187.40</Text>
+            <Text style={[styles.totalLabel, { color: colors.textSecondary }]}>Expense</Text>
+            <Text style={[styles.totalAmount, { color: colors.text }]}>$1,187.40</Text>
           </View>
         </View>
       </View>
@@ -93,7 +79,6 @@ const AnalysisChart = () => {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#fff',
     marginHorizontal: 20,
     borderRadius: 20,
     padding: 20,
@@ -112,7 +97,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2d3748',
   },
   iconGroup: {
     flexDirection: 'row',
@@ -131,7 +115,6 @@ const styles = StyleSheet.create({
   },
   yAxisLabel: {
     fontSize: 12,
-    color: '#a0aec0',
   },
   chart: {
     flex: 1,
@@ -140,7 +123,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     borderLeftWidth: 1,
     borderBottomWidth: 1,
-    borderColor: '#e2e8f0',
   },
   barContainer: {
     flex: 1,
@@ -152,15 +134,14 @@ const styles = StyleSheet.create({
     width: 15,
   },
   greenBar: {
-    backgroundColor: '#34d399',
+    // backgroundColor handled inline for theme
   },
   blueBar: {
-    backgroundColor: '#4299e1',
+    // backgroundColor handled inline for theme
   },
   xAxisLabel: {
     fontSize: 12,
     marginTop: 5,
-    color: '#718096',
   },
   totalsContainer: {
     flexDirection: 'row',
@@ -175,7 +156,6 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#ebf4ff',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
@@ -183,12 +163,10 @@ const styles = StyleSheet.create({
   totalTextContainer: {},
   totalLabel: {
     fontSize: 12,
-    color: '#a0aec0',
   },
   totalAmount: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#2d3748',
   },
 });
 

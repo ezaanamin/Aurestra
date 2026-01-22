@@ -10,19 +10,22 @@ import {
     TouchableOpacity,
     SafeAreaView,
     ActivityIndicator,
-    Modal
+    Modal,
+    Animated
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
 import { PieChart, LineChart } from 'react-native-chart-kit';
-import Ionicons from 'react-native-vector-icons/Ionicons'; // Switched to Ionicons
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import MCIcon from 'react-native-vector-icons/MaterialCommunityIcons';
 import {
     fetchTrendHistory,
     fetchLatestTransactions,
     fetchTopSpendingCategories,
     updateTransaction,
-    fetchCategories
+    fetchCategories,
+    fetchTotalExpenses,
+    fetchFinancialInsight
 } from '../API/slice/API';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -30,24 +33,26 @@ const { width } = Dimensions.get('window');
 const chartWidth = width - 40;
 
 const CATEGORY_DETAILS_MAP = {
-    "Food & Snacks": { icon: 'fast-food', color: '#FF6B6B' },
-    "Ride / Transport": { icon: 'car', color: '#4ECDC4' },
+    "Food & Snacks": { icon: 'food', color: '#10B981' },
+    "Ride / Transport": { icon: 'car', color: '#F59E0B' },
     "Bills & Utilities": { icon: 'receipt', color: '#3B82F6' },
-    "Shopping": { icon: 'cart', color: '#A78BFA' },
-    "Healthcare": { icon: 'medkit', color: '#10B981' },
-    "Entertainment": { icon: 'film', color: '#EC4899' },
-    "Education": { icon: 'school', color: '#F59E0B' },
-    "Groceries": { icon: 'basket', color: '#10B981' },
-    "Personal Care": { icon: 'sparkles', color: '#8B5CF6' },
-    "Online Services": { icon: 'globe', color: '#3B82F6' },
-    "Gym & Fitness": { icon: 'barbell', color: '#F59E0B' },
-    "Subscription (Google one )": { icon: 'card', color: '#A78BFA' },
-    "Miscellaneous": { icon: 'grid', color: '#64748B' },
-    "Income": { icon: 'log-in', color: '#10B981' },
+    "Shopping": { icon: 'cart', color: '#8B5CF6' },
+    "Healthcare": { icon: 'medical-bag', color: '#10B981' },
+    "Entertainment": { icon: 'movie', color: '#EC4899' },
+    "Education": { icon: 'school', color: '#6366F1' },
+    "Groceries": { icon: 'cart-outline', color: '#059669' },
+    "Personal Care": { icon: 'sparkles', color: '#C084FC' },
+    "Online Services": { icon: 'web', color: '#60A5FA' },
+    "Gym & Fitness": { icon: 'dumbbell', color: '#F87171' },
+    "Subscription (Google one )": { icon: 'credit-card-outline', color: '#8B5CF6' },
+    "Miscellaneous": { icon: 'dots-horizontal', color: '#64748B' },
+    "Income": { icon: 'bank-transfer-in', color: '#10B981' },
 };
 
 const TransactionScreen = ({ navigation }) => {
     const dispatch = useDispatch();
+    const [animatedValue] = useState(new Animated.Value(0));
+    const [scrollY] = useState(new Animated.Value(0));
 
     // Redux Selectors
     const historyData = useSelector((state) => state.API?.fourMonthHistory || []);
@@ -59,12 +64,13 @@ const TransactionScreen = ({ navigation }) => {
 
     const topCategories = useSelector((state) => state.API?.topCategories || []);
     const topCategoriesStatus = useSelector((state) => state.API?.topCategoriesStatus || 'idle');
+
     const categories = useSelector((state) => state.API?.categories || []);
+    const totalExpenses = useSelector((state) => state.API?.totalExpenses || 0);
+    const financialInsight = useSelector((state) => state.API?.financialInsight || null);
 
     const [refreshing, setRefreshing] = useState(false);
-    const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'week', 'month', 'year'
-
-    // Edit Category Modal State
+    const [activeFilter, setActiveFilter] = useState('all');
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedTransaction, setSelectedTransaction] = useState(null);
 
@@ -75,7 +81,6 @@ const TransactionScreen = ({ navigation }) => {
 
     const handleCategorySelect = async (category) => {
         if (selectedTransaction) {
-            // Import updateTransaction (imported at top)
             try {
                 await dispatch(updateTransaction({
                     id: selectedTransaction.id,
@@ -93,12 +98,22 @@ const TransactionScreen = ({ navigation }) => {
         dispatch(fetchLatestTransactions(50));
         dispatch(fetchTopSpendingCategories(filter));
         dispatch(fetchCategories());
+        dispatch(fetchTotalExpenses());
+        dispatch(fetchFinancialInsight());
     };
 
-    // Initial Fetch and reload when filter changes
     useEffect(() => {
         loadData(activeFilter);
     }, [activeFilter]);
+
+    useEffect(() => {
+        Animated.spring(animatedValue, {
+            toValue: 1,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+        }).start();
+    }, []);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -109,21 +124,17 @@ const TransactionScreen = ({ navigation }) => {
         ]).finally(() => setRefreshing(false));
     };
 
-    // --- Process Data for UI ---
-
-    // 1. Stats & Trend
-    const currentExpense = historyData?.[0]?.actual?.expense || 0;
-    // historyData[1] is previous month (if array is ordered descending by month which app.py does)
+    // Process Data
+    const currentExpense = totalExpenses || historyData?.[0]?.actual?.expense || 0;
     const prevExpense = historyData?.[1]?.actual?.expense || 1;
 
-    // Calculate trend
     let trend = 0;
     if (prevExpense > 0) {
         trend = Math.round(((currentExpense - prevExpense) / prevExpense) * 100);
     }
-    const isPositiveTrend = trend <= 0; // Negative change in expense is "Positive" for wallet
+    const isPositiveTrend = trend <= 0;
 
-    // 2. Line Chart Data
+    // Line Chart Data
     let chartLabels = [];
     let chartValues = [];
 
@@ -132,7 +143,6 @@ const TransactionScreen = ({ navigation }) => {
         chartValues = trendHistory.map(item => Number(item.value) || 0);
     }
 
-    // Fallback defaults if no data or single data point
     let finalLabels = chartLabels;
     let finalValues = chartValues;
 
@@ -149,20 +159,19 @@ const TransactionScreen = ({ navigation }) => {
         datasets: [
             {
                 data: finalValues,
-                color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
+                color: (opacity = 1) => `rgba(139, 92, 246, ${opacity})`,
                 strokeWidth: 3,
             },
         ],
     };
 
-    // 3. Pie Chart Data
+    // Pie Chart Data
     let pieData = [];
     let totalSpent = 0;
 
     if (topCategories && topCategories.length > 0) {
         pieData = topCategories.map((cat) => {
-            const details = CATEGORY_DETAILS_MAP[cat.category] || CATEGORY_DETAILS_MAP['Miscellaneous'];
-            // Ensure numeric value
+            const details = CATEGORY_DETAILS_MAP[cat.category] || CATEGORY_DETAILS_MAP['Miscellaneous'] || { color: '#808080', icon: 'help-circle' };
             const amount = Number(cat.total_spent) || 0;
             totalSpent += amount;
             return {
@@ -174,12 +183,10 @@ const TransactionScreen = ({ navigation }) => {
             };
         });
     } else {
-        // Empty placeholder
         pieData = [{ name: 'No Data', amount: 100, color: '#E2E8F0', legendFontColor: '#64748B', legendFontSize: 12 }];
     }
 
-    // 4. Helpers
-    const { currency } = useSettings();
+    const { currency, colors, isDarkMode } = useSettings();
 
     const formatCurrency = (amount) => {
         const safeAmount = Number(amount);
@@ -194,76 +201,196 @@ const TransactionScreen = ({ navigation }) => {
     };
 
     const filters = [
-        { id: 'all', label: 'All Time', icon: 'calendar' },
-        { id: 'week', label: 'Week', icon: 'calendar-outline' },
-        { id: 'month', label: 'Month', icon: 'calendar' },
-        { id: 'year', label: 'Year', icon: 'calendar-number' },
+        { id: 'all', label: 'All Time', icon: 'infinite' },
+        { id: 'week', label: 'Week', icon: 'calendar' },
+        { id: 'month', label: 'Month', icon: 'calendar-number' },
+        { id: 'year', label: 'Year', icon: 'time' },
     ];
 
+    const headerOpacity = scrollY.interpolate({
+        inputRange: [0, 100],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+    });
+
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
+        <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#0A0A0B' : '#F8F9FE' }]}>
+            <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor="transparent" translucent />
 
-            {/* Modern Header */}
-            <LinearGradient colors={['#1E293B', '#334155']} style={styles.header}>
-                <View style={styles.headerContent}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
-                    </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerTitle}>Analytics</Text>
-                        <Text style={styles.headerSubtitle}>Track your spending patterns</Text>
-                    </View>
-                    <TouchableOpacity style={styles.headerIconButton}>
-                        <Ionicons name="filter" size={24} color="#FFFFFF" />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Stats Overview Card */}
-                <View style={styles.statsCard}>
-                    <View style={styles.statsHeader}>
-                        <Text style={styles.statsLabel}>Total Spending (This Month)</Text>
-                        <View style={[styles.trendBadge, isPositiveTrend ? styles.trendBadgeGood : styles.trendBadgeBad]}>
-                            <Ionicons
-                                name={isPositiveTrend ? 'trending-down' : 'trending-up'}
-                                size={14}
-                                color={isPositiveTrend ? '#10B981' : '#EF4444'}
-                            />
-                            <Text style={[styles.trendText, isPositiveTrend ? styles.trendTextGood : styles.trendTextBad]}>
-                                {Math.abs(trend)}%
-                            </Text>
+            {/* Floating Header */}
+            <Animated.View style={[styles.floatingHeader, { opacity: headerOpacity }]}>
+                <LinearGradient
+                    colors={isDarkMode ? ['#1A1A1D', '#0A0A0B'] : ['#FFFFFF', '#F8F9FE']}
+                    style={styles.floatingHeaderGradient}
+                >
+                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.floatingBackButton}>
+                        <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
+                            <Ionicons name="arrow-back" size={20} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
                         </View>
-                    </View>
-                    <Text style={styles.statsAmount}>{formatCurrency(currentExpense)}</Text>
-                    <Text style={styles.statsSubtext}>
-                        {isPositiveTrend ? '🎉 Great job! Spending is down' : '⚠️ Spending increased from last month'}
-                    </Text>
-                </View>
-            </LinearGradient>
+                    </TouchableOpacity>
+                    <Text style={[styles.floatingTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>Analytics</Text>
+                    <View style={{ width: 40 }} />
+                </LinearGradient>
+            </Animated.View>
 
-            <ScrollView
-                style={styles.scrollView}
+            <Animated.ScrollView
+                onScroll={Animated.event(
+                    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+                    { useNativeDriver: true }
+                )}
+                scrollEventThrottle={16}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3B82F6']} />
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#8B5CF6']} />
                 }
             >
-                {/* Period Filter */}
+                {/* Hero Header */}
+                <View style={styles.heroSection}>
+                    <View style={styles.heroTop}>
+                        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+                            <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
+                                <Ionicons name="arrow-back" size={22} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
+                            </View>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity style={styles.notificationButton}>
+                            <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)' }]}>
+                                <Ionicons name="notifications-outline" size={22} color="#8B5CF6" />
+                                <View style={styles.notificationDot} />
+                            </View>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.heroContent}>
+                        <Text style={[styles.heroGreeting, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                            Your Financial Overview
+                        </Text>
+                        <Text style={[styles.heroTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                            Analytics
+                        </Text>
+                    </View>
+                </View>
+
+                {/* Stats Cards */}
+                <View style={styles.statsGrid}>
+                    <Animated.View style={[
+                        styles.statCard,
+                        {
+                            transform: [{
+                                scale: animatedValue.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0.9, 1],
+                                })
+                            }],
+                            opacity: animatedValue,
+                        }
+                    ]}>
+                        <LinearGradient
+                            colors={isDarkMode ? ['#8B5CF6', '#7C3AED'] : ['#8B5CF6', '#6D28D9']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.statGradient}
+                        >
+                            <View style={styles.statIconContainer}>
+                                <Ionicons name="trending-down" size={24} color="#FFFFFF" />
+                            </View>
+                            <Text style={styles.statLabel}>Total Spent</Text>
+                            <Text style={styles.statAmount}>{formatCurrency(currentExpense)}</Text>
+                            <View style={styles.statBadge}>
+                                <Ionicons
+                                    name={isPositiveTrend ? 'arrow-down' : 'arrow-up'}
+                                    size={12}
+                                    color="#FFFFFF"
+                                />
+                                <Text style={styles.statBadgeText}>{Math.abs(trend)}%</Text>
+                            </View>
+                        </LinearGradient>
+                    </Animated.View>
+
+                    <View style={styles.miniStatsColumn}>
+                        <Animated.View style={[
+                            styles.miniStatCard,
+                            {
+                                backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                                borderColor: isDarkMode ? '#27272A' : '#E4E4E7',
+                                transform: [{
+                                    translateX: animatedValue.interpolate({
+                                        inputRange: [0, 1],
+                                        outputRange: [50, 0],
+                                    })
+                                }],
+                                opacity: animatedValue,
+                            }
+                        ]}>
+                            <View style={[styles.miniStatIcon, { backgroundColor: '#10B98120' }]}>
+                                <Ionicons name="arrow-up-circle" size={20} color="#10B981" />
+                            </View>
+                            <Text style={[styles.miniStatLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                Income
+                            </Text>
+                            <Text style={[styles.miniStatValue, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                {formatCurrency(0)}
+                            </Text>
+                        </Animated.View>
+
+                        <Animated.View style={[
+                            styles.miniStatCard,
+                            {
+                                backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                                borderColor: isDarkMode ? '#27272A' : '#E4E4E7',
+                                transform: [{
+                                    translateX: animatedValue.interpolate({
+                                        inputRange: [0, 1],
+                                        outputRange: [50, 0],
+                                    })
+                                }],
+                                opacity: animatedValue,
+                            }
+                        ]}>
+                            <View style={[styles.miniStatIcon, { backgroundColor: '#F59E0B20' }]}>
+                                <Ionicons name="wallet" size={20} color="#F59E0B" />
+                            </View>
+                            <Text style={[styles.miniStatLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                Balance
+                            </Text>
+                            <Text style={[styles.miniStatValue, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                {formatCurrency(0)}
+                            </Text>
+                        </Animated.View>
+                    </View>
+                </View>
+
+                {/* Time Period Filter */}
                 <View style={styles.filterSection}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterContainer}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
                         {filters.map((filter) => (
                             <TouchableOpacity
                                 key={filter.id}
-                                style={[styles.filterButton, activeFilter === filter.id && styles.filterButtonActive]}
+                                style={[
+                                    styles.filterChip,
+                                    {
+                                        backgroundColor: activeFilter === filter.id
+                                            ? (isDarkMode ? '#8B5CF6' : '#8B5CF6')
+                                            : (isDarkMode ? '#1A1A1D' : '#FFFFFF'),
+                                        borderColor: activeFilter === filter.id
+                                            ? '#8B5CF6'
+                                            : (isDarkMode ? '#27272A' : '#E4E4E7'),
+                                    }
+                                ]}
                                 onPress={() => setActiveFilter(filter.id)}
                             >
                                 <Ionicons
                                     name={filter.icon}
-                                    size={18}
-                                    color={activeFilter === filter.id ? '#FFFFFF' : '#64748B'}
+                                    size={16}
+                                    color={activeFilter === filter.id ? '#FFFFFF' : (isDarkMode ? '#A1A1AA' : '#71717A')}
                                 />
-                                <Text style={[styles.filterText, activeFilter === filter.id && styles.filterTextActive]}>
+                                <Text style={[
+                                    styles.filterChipText,
+                                    {
+                                        color: activeFilter === filter.id ? '#FFFFFF' : (isDarkMode ? '#A1A1AA' : '#71717A')
+                                    }
+                                ]}>
                                     {filter.label}
                                 </Text>
                             </TouchableOpacity>
@@ -272,76 +399,90 @@ const TransactionScreen = ({ navigation }) => {
                 </View>
 
                 {/* Spending Trend Chart */}
-                <View style={styles.chartCard}>
+                <View style={[styles.chartCard, {
+                    backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                    borderColor: isDarkMode ? '#27272A' : '#E4E4E7'
+                }]}>
                     <View style={styles.chartHeader}>
                         <View>
-                            <Text style={styles.chartTitle}>Spending Trend</Text>
-                            <Text style={styles.chartSubtitle}>
+                            <Text style={[styles.chartTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                Spending Trend
+                            </Text>
+                            <Text style={[styles.chartSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
                                 {activeFilter === 'week' ? 'Past 7 days' :
                                     activeFilter === 'month' ? 'Last 6 months' :
                                         activeFilter === 'year' ? 'Current year' : 'All time overview'}
                             </Text>
                         </View>
-                        <TouchableOpacity style={styles.chartMenuButton}>
-                            <Ionicons name="ellipsis-horizontal" size={24} color="#64748B" />
+                        <TouchableOpacity style={[styles.chartMenu, {
+                            backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+                        }]}>
+                            <Ionicons name="ellipsis-horizontal" size={18} color={isDarkMode ? '#FFFFFF' : '#71717A'} />
                         </TouchableOpacity>
                     </View>
 
                     {historyStatus === 'loading' ? (
-                        <ActivityIndicator color="#3B82F6" />
+                        <View style={styles.chartLoading}>
+                            <ActivityIndicator color="#8B5CF6" size="large" />
+                        </View>
                     ) : (
                         <LineChart
                             data={lineChartData}
                             width={chartWidth - 40}
-                            height={200}
+                            height={220}
                             chartConfig={{
-                                backgroundColor: '#FFFFFF',
-                                backgroundGradientFrom: '#FFFFFF',
-                                backgroundGradientTo: '#FFFFFF',
+                                backgroundColor: 'transparent',
+                                backgroundGradientFrom: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                                backgroundGradientTo: isDarkMode ? '#1A1A1D' : '#FFFFFF',
                                 decimalPlaces: 0,
-                                color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
-                                labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
+                                color: (opacity = 1) => `rgba(139, 92, 246, ${opacity})`,
+                                labelColor: (opacity = 1) => isDarkMode ? `rgba(161, 161, 170, ${opacity})` : `rgba(113, 113, 122, ${opacity})`,
                                 style: {
                                     borderRadius: 16,
                                 },
                                 propsForDots: {
-                                    r: '6',
-                                    strokeWidth: '2',
-                                    stroke: '#3B82F6',
+                                    r: '5',
+                                    strokeWidth: '3',
+                                    stroke: '#8B5CF6',
+                                    fill: isDarkMode ? '#1A1A1D' : '#FFFFFF'
                                 },
                                 propsForBackgroundLines: {
-                                    strokeDasharray: '',
-                                    stroke: '#E2E8F0',
+                                    strokeDasharray: '5,5',
+                                    stroke: isDarkMode ? '#27272A' : '#E4E4E7',
                                     strokeWidth: 1,
                                 },
                             }}
                             style={styles.lineChart}
+                            bezier
                             fromZero={true}
                             withVerticalLines={false}
                             withHorizontalLines={true}
                             withInnerLines={true}
                             withOuterLines={false}
-                            withVerticalLabels={true}
-                            withHorizontalLabels={true}
                         />
                     )}
                 </View>
 
                 {/* Category Breakdown */}
-                <View style={styles.chartCard}>
+                <View style={[styles.chartCard, {
+                    backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                    borderColor: isDarkMode ? '#27272A' : '#E4E4E7'
+                }]}>
                     <View style={styles.chartHeader}>
                         <View>
-                            <Text style={styles.chartTitle}>Spending by Category</Text>
-                            <Text style={styles.chartSubtitle}>
-                                {activeFilter === 'week' ? 'This week' :
-                                    activeFilter === 'month' ? 'This month' :
-                                        activeFilter === 'year' ? 'This year' : 'All time'} breakdown
+                            <Text style={[styles.chartTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                Spending Breakdown
+                            </Text>
+                            <Text style={[styles.chartSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                By category
                             </Text>
                         </View>
                     </View>
 
                     {topCategoriesStatus === 'loading' ? (
-                        <ActivityIndicator color="#3B82F6" />
+                        <View style={styles.chartLoading}>
+                            <ActivityIndicator color="#8B5CF6" size="large" />
+                        </View>
                     ) : (
                         <>
                             <PieChart
@@ -352,30 +493,36 @@ const TransactionScreen = ({ navigation }) => {
                                 backgroundColor="transparent"
                                 paddingLeft="15"
                                 chartConfig={{
-                                    color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                                    color: (opacity = 1) => isDarkMode ? `rgba(255, 255, 255, ${opacity})` : `rgba(0, 0, 0, ${opacity})`,
                                 }}
                                 style={styles.pieChart}
                             />
 
-                            {/* Category List */}
                             <View style={styles.categoryList}>
                                 {pieData.map((item, index) => {
-                                    // Avoid div by zero
                                     const percentage = totalSpent > 0 ? ((item.amount / totalSpent) * 100).toFixed(1) : 0;
                                     if (item.name === 'No Data') return null;
 
                                     return (
-                                        <TouchableOpacity key={index} style={styles.categoryItem}>
+                                        <TouchableOpacity key={index} style={[styles.categoryItem, {
+                                            backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+                                        }]}>
                                             <View style={styles.categoryLeft}>
                                                 <View style={[styles.categoryDot, { backgroundColor: item.color }]} />
                                                 <View style={styles.categoryInfo}>
-                                                    <Text style={styles.categoryName}>{item.name}</Text>
-                                                    <Text style={styles.categoryPercentage}>{percentage}% of total</Text>
+                                                    <Text style={[styles.categoryName, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                                        {item.name}
+                                                    </Text>
+                                                    <Text style={[styles.categoryPercentage, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                                        {percentage}% of total
+                                                    </Text>
                                                 </View>
                                             </View>
                                             <View style={styles.categoryRight}>
-                                                <Text style={styles.categoryAmount}>{formatCurrency(item.amount)}</Text>
-                                                <Ionicons name="chevron-forward" size={20} color="#CBD5E1" />
+                                                <Text style={[styles.categoryAmount, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                                    {formatCurrency(item.amount)}
+                                                </Text>
+                                                <Ionicons name="chevron-forward" size={18} color={isDarkMode ? '#52525B' : '#A1A1AA'} />
                                             </View>
                                         </TouchableOpacity>
                                     );
@@ -385,96 +532,131 @@ const TransactionScreen = ({ navigation }) => {
                     )}
                 </View>
 
+                {/* AI Insight Card */}
+                {financialInsight && (
+                    <View style={styles.insightCard}>
+                        <LinearGradient
+                            colors={isPositiveTrend
+                                ? (isDarkMode ? ['#065F46', '#047857'] : ['#D1FAE5', '#A7F3D0'])
+                                : (isDarkMode ? ['#991B1B', '#B91C1C'] : ['#FEE2E2', '#FECACA'])
+                            }
+                            style={styles.insightGradient}
+                        >
+                            <View style={styles.insightIcon}>
+                                <Ionicons
+                                    name="sparkles"
+                                    size={24}
+                                    color={isPositiveTrend ? (isDarkMode ? '#D1FAE5' : '#059669') : (isDarkMode ? '#FEE2E2' : '#DC2626')}
+                                />
+                            </View>
+                            <View style={styles.insightContent}>
+                                <Text style={[styles.insightTitle, {
+                                    color: isPositiveTrend ? (isDarkMode ? '#D1FAE5' : '#065F46') : (isDarkMode ? '#FEE2E2' : '#991B1B')
+                                }]}>
+                                    AI Financial Insight
+                                </Text>
+                                <Text style={[styles.insightText, {
+                                    color: isPositiveTrend ? (isDarkMode ? '#A7F3D0' : '#047857') : (isDarkMode ? '#FECACA' : '#B91C1C')
+                                }]}>
+                                    {financialInsight.content}
+                                </Text>
+                            </View>
+                        </LinearGradient>
+                    </View>
+                )}
+
                 {/* Recent Transactions */}
                 <View style={styles.transactionsSection}>
                     <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>All Transactions</Text>
+                        <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                            Recent Activity
+                        </Text>
+                        <TouchableOpacity>
+                            <Text style={styles.seeAllText}>See All</Text>
+                        </TouchableOpacity>
                     </View>
 
-                    <View style={styles.transactionList}>
+                    <View style={[styles.transactionList, {
+                        backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                        borderColor: isDarkMode ? '#27272A' : '#E4E4E7'
+                    }]}>
                         {transactionsStatus === 'loading' && (
-                            <View style={{ padding: 20 }}>
-                                <ActivityIndicator color="#3B82F6" />
+                            <View style={styles.transactionLoading}>
+                                <ActivityIndicator color="#8B5CF6" />
                             </View>
                         )}
                         {transactionsStatus !== 'loading' && latestTransactions && latestTransactions.length === 0 && (
-                            <View style={{ padding: 20 }}>
-                                <Text style={{ color: '#64748B', textAlign: 'center' }}>No transactions found</Text>
+                            <View style={styles.emptyState}>
+                                <Ionicons name="receipt-outline" size={48} color={isDarkMode ? '#52525B' : '#D4D4D8'} />
+                                <Text style={[styles.emptyText, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                    No transactions found
+                                </Text>
                             </View>
                         )}
 
-                        {latestTransactions && latestTransactions.map((transaction, index) => {
+                        {latestTransactions && latestTransactions.slice(0, 8).map((transaction, index) => {
                             const categoryName = transaction.purpose || 'Other';
                             const details = CATEGORY_DETAILS_MAP[categoryName] || CATEGORY_DETAILS_MAP['Miscellaneous'];
                             const isIncome = transaction.type === 'credit';
                             const icon = isIncome ? 'arrow-down-circle' : details.icon;
                             const color = isIncome ? '#10B981' : details.color;
 
+                            let rawTitle = transaction.notes || transaction.sender || transaction.receiver || 'General Transaction';
+                            rawTitle = rawTitle.replace(/Payment method:\s*/gi, '').trim();
+                            if (rawTitle.startsWith('ID#')) {
+                                rawTitle = rawTitle.replace(/ID#\s*\d+\s*/, '').trim();
+                            }
+                            if (!rawTitle) rawTitle = 'Transaction';
+                            const title = rawTitle.length > 28 ? rawTitle.substring(0, 28) + '...' : rawTitle;
+
                             return (
                                 <TouchableOpacity
                                     key={transaction.id}
                                     style={[
                                         styles.transactionItem,
-                                        index === latestTransactions.length - 1 && styles.transactionItemLast
+                                        index === latestTransactions.slice(0, 8).length - 1 && styles.transactionItemLast
                                     ]}
                                     onPress={() => openEditModal(transaction)}
                                 >
                                     <View style={[styles.transactionIcon, { backgroundColor: color + '20' }]}>
-                                        <Ionicons name={icon} size={24} color={color} />
+                                        <Ionicons name={icon} size={22} color={color} />
                                     </View>
+
                                     <View style={styles.transactionInfo}>
-                                        <Text style={styles.transactionTitle}>
-                                            {transaction.sender || transaction.purpose || 'Transaction'}
+                                        <Text style={[styles.transactionTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]} numberOfLines={1}>
+                                            {title}
                                         </Text>
-                                        <Text style={styles.transactionCategory}>
-                                            {transaction.purpose || 'Uncategorized'} • {new Date(transaction.date).toLocaleDateString()}
-                                        </Text>
+                                        <View style={styles.transactionMeta}>
+                                            <View style={[styles.categoryBadge, {
+                                                backgroundColor: color + '15',
+                                                borderColor: color + '30'
+                                            }]}>
+                                                <Text style={[styles.categoryBadgeText, { color: color }]}>
+                                                    {transaction.purpose || 'Uncategorized'}
+                                                </Text>
+                                            </View>
+                                            <Text style={[styles.transactionDate, { color: isDarkMode ? '#71717A' : '#A1A1AA' }]}>
+                                                {new Date(transaction.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                            </Text>
+                                        </View>
                                     </View>
+
                                     <View style={styles.transactionRight}>
                                         <Text
                                             style={[
                                                 styles.transactionAmount,
-                                                isIncome ? styles.transactionAmountIncome : styles.transactionAmountExpense,
+                                                { color: isIncome ? '#10B981' : (isDarkMode ? '#FFFFFF' : '#1A1A1D') }
                                             ]}
                                         >
                                             {isIncome ? '+' : ''}{formatCurrency(transaction.amount)}
                                         </Text>
-                                        <Ionicons
-                                            name={isIncome ? 'arrow-up-circle' : 'arrow-down-circle'}
-                                            size={16}
-                                            color={isIncome ? '#10B981' : '#64748B'}
-                                        />
                                     </View>
                                 </TouchableOpacity>
                             )
                         })}
                     </View>
                 </View>
-
-                {/* Insights Card */}
-                <LinearGradient
-                    colors={isPositiveTrend ? ['#D1FAE5', '#A7F3D0'] : ['#FEE2E2', '#FECACA']}
-                    style={styles.insightCard}
-                >
-                    <View style={styles.insightIconWrapper}>
-                        <Ionicons
-                            name={isPositiveTrend ? 'bulb' : 'alert-circle'}
-                            size={28}
-                            color={isPositiveTrend ? '#059669' : '#DC2626'}
-                        />
-                    </View>
-                    <View style={styles.insightContent}>
-                        <Text style={[styles.insightTitle, { color: isPositiveTrend ? '#065F46' : '#991B1B' }]}>
-                            {isPositiveTrend ? 'Smart Spending!' : 'Budget Alert'}
-                        </Text>
-                        <Text style={[styles.insightText, { color: isPositiveTrend ? '#047857' : '#B91C1C' }]}>
-                            {isPositiveTrend
-                                ? `You've reduced spending by ${Math.abs(trend)}% compared to last month. Keep it up!`
-                                : `Your spending increased by ${trend}% this month. Consider reviewing your budget.`}
-                        </Text>
-                    </View>
-                </LinearGradient>
-            </ScrollView>
+            </Animated.ScrollView>
 
             {/* Edit Category Modal */}
             <Modal
@@ -484,28 +666,40 @@ const TransactionScreen = ({ navigation }) => {
                 onRequestClose={() => setModalVisible(false)}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
+                    <TouchableOpacity
+                        style={styles.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => setModalVisible(false)}
+                    />
+                    <View style={[styles.modalContent, {
+                        backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF'
+                    }]}>
+                        <View style={styles.modalHandle} />
+                        
                         <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Change Category</Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                <TouchableOpacity
-                                    onPress={() => {
-                                        setModalVisible(false);
-                                        navigation.navigate('CategoryManagement');
-                                    }}
-                                >
-                                    <Text style={{ color: '#3B82F6', fontWeight: 'bold' }}>Manage</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity onPress={() => setModalVisible(false)}>
-                                    <Ionicons name="close" size={24} color="#64748B" />
-                                </TouchableOpacity>
+                            <View>
+                                <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                    Change Category
+                                </Text>
+                                <Text style={[styles.modalSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                    Select a new category
+                                </Text>
                             </View>
+                            <TouchableOpacity
+                                style={[styles.manageButton, {
+                                    backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+                                }]}
+                                onPress={() => {
+                                    setModalVisible(false);
+                                    navigation.navigate('CategoryManagement');
+                                }}
+                            >
+                                <Ionicons name="settings-outline" size={18} color="#8B5CF6" />
+                                <Text style={styles.manageButtonText}>Manage</Text>
+                            </TouchableOpacity>
                         </View>
-                        <Text style={{ color: '#64748B', marginBottom: 20 }}>
-                            Select a new category for this transaction.
-                        </Text>
 
-                        <ScrollView style={{ maxHeight: 400 }}>
+                        <ScrollView style={styles.categoryScroll} showsVerticalScrollIndicator={false}>
                             {categories
                                 .filter(cat => {
                                     if (selectedTransaction?.type === 'debit') {
@@ -517,15 +711,28 @@ const TransactionScreen = ({ navigation }) => {
                                 .map((cat) => (
                                     <TouchableOpacity
                                         key={cat.id}
-                                        style={styles.categoryOption}
+                                        style={[styles.categoryOption, {
+                                            backgroundColor: selectedTransaction?.purpose === cat.name
+                                                ? (isDarkMode ? '#8B5CF620' : '#8B5CF610')
+                                                : 'transparent',
+                                            borderBottomColor: isDarkMode ? '#27272A' : '#E4E4E7'
+                                        }]}
                                         onPress={() => handleCategorySelect(cat.name)}
                                     >
-                                        <View style={[styles.categoryIconContainer, { backgroundColor: (cat.color || '#64748B') + '20', width: 40, height: 40 }]}>
-                                            <MCIcon name={cat.icon} size={20} color={cat.color || '#64748B'} />
+                                        <View style={[styles.categoryOptionIcon, {
+                                            backgroundColor: (cat.color || '#64748B') + '20'
+                                        }]}>
+                                            <MCIcon name={cat.icon} size={22} color={cat.color || '#64748B'} />
                                         </View>
-                                        <Text style={styles.categoryName}>{cat.name}</Text>
+                                        <Text style={[styles.categoryOptionName, {
+                                            color: isDarkMode ? '#FFFFFF' : '#1A1A1D'
+                                        }]}>
+                                            {cat.name}
+                                        </Text>
                                         {selectedTransaction?.purpose === cat.name && (
-                                            <Ionicons name="checkmark" size={20} color="#3B82F6" style={{ marginLeft: 'auto' }} />
+                                            <View style={styles.checkmark}>
+                                                <Ionicons name="checkmark-circle" size={24} color="#8B5CF6" />
+                                            </View>
                                         )}
                                     </TouchableOpacity>
                                 ))}
@@ -540,141 +747,184 @@ const TransactionScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#F8FAFC',
     },
-    header: {
-        borderBottomLeftRadius: 32,
-        borderBottomRightRadius: 32,
+    floatingHeader: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 1000,
+        paddingTop: Platform.OS === 'ios' ? 44 : StatusBar.currentHeight,
+    },
+    floatingHeaderGradient: {
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    floatingBackButton: {},
+    floatingTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        letterSpacing: -0.3,
+    },
+    scrollContent: {
+        paddingTop: Platform.OS === 'ios' ? 44 : StatusBar.currentHeight,
+        paddingBottom: 40,
+    },
+    heroSection: {
+        paddingHorizontal: 20,
+        paddingTop: 20,
         paddingBottom: 24,
     },
-    headerContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingTop: 16,
-        marginBottom: 20,
-    },
-    backButton: {
-        padding: 8,
-    },
-    headerTitleContainer: {
-        flex: 1,
-        alignItems: 'center',
-    },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: '#FFFFFF',
-    },
-    headerSubtitle: {
-        fontSize: 13,
-        color: '#94A3B8',
-        marginTop: 2,
-    },
-    headerIconButton: {
-        padding: 8,
-    },
-    statsCard: {
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        marginHorizontal: 20,
-        borderRadius: 20,
-        padding: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.2)',
-    },
-    statsHeader: {
+    heroTop: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 24,
     },
-    statsLabel: {
+    iconButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    backButton: {},
+    notificationButton: {
+        position: 'relative',
+    },
+    notificationDot: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#EF4444',
+        borderWidth: 2,
+        borderColor: '#FFFFFF',
+    },
+    heroContent: {
+        gap: 4,
+    },
+    heroGreeting: {
         fontSize: 14,
-        color: '#94A3B8',
         fontWeight: '500',
     },
-    trendBadge: {
+    heroTitle: {
+        fontSize: 32,
+        fontWeight: '800',
+        letterSpacing: -1,
+    },
+    statsGrid: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        gap: 12,
+        marginBottom: 24,
+    },
+    statCard: {
+        flex: 2,
+        borderRadius: 24,
+        overflow: 'hidden',
+    },
+    statGradient: {
+        padding: 20,
+        minHeight: 200,
+        justifyContent: 'space-between',
+    },
+    statIconContainer: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    statLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: 'rgba(255,255,255,0.8)',
+        marginBottom: 4,
+    },
+    statAmount: {
+        fontSize: 28,
+        fontWeight: '800',
+        color: '#FFFFFF',
+        letterSpacing: -0.5,
+        marginBottom: 8,
+    },
+    statBadge: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
+        alignSelf: 'flex-start',
         paddingHorizontal: 10,
         paddingVertical: 4,
         borderRadius: 12,
-        borderWidth: 1,
+        backgroundColor: 'rgba(255,255,255,0.2)',
     },
-    trendBadgeGood: {
-        backgroundColor: 'rgba(16, 185, 129, 0.2)',
-        borderColor: 'rgba(16, 185, 129, 0.3)',
-    },
-    trendBadgeBad: {
-        backgroundColor: 'rgba(239, 68, 68, 0.2)',
-        borderColor: 'rgba(239, 68, 68, 0.3)',
-    },
-    trendText: {
+    statBadgeText: {
         fontSize: 12,
-        fontWeight: 'bold',
-    },
-    trendTextGood: {
-        color: '#6EE7B7',
-    },
-    trendTextBad: {
-        color: '#FCA5A5',
-    },
-    statsAmount: {
-        fontSize: 36,
-        fontWeight: 'bold',
+        fontWeight: '700',
         color: '#FFFFFF',
+    },
+    miniStatsColumn: {
+        flex: 1,
+        gap: 12,
+    },
+    miniStatCard: {
+        flex: 1,
+        borderRadius: 20,
+        padding: 16,
+        borderWidth: 1,
+        justifyContent: 'space-between',
+    },
+    miniStatIcon: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
         marginBottom: 8,
     },
-    statsSubtext: {
-        fontSize: 13,
-        color: '#CBD5E1',
+    miniStatLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        marginBottom: 4,
     },
-    scrollView: {
-        flex: 1,
-    },
-    scrollContent: {
-        paddingBottom: 100,
+    miniStatValue: {
+        fontSize: 16,
+        fontWeight: '800',
+        letterSpacing: -0.3,
     },
     filterSection: {
-        paddingVertical: 16,
+        marginBottom: 20,
     },
-    filterContainer: {
+    filterScroll: {
         paddingHorizontal: 20,
-        gap: 10,
+        gap: 8,
     },
-    filterButton: {
+    filterChip: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
         paddingVertical: 10,
         paddingHorizontal: 16,
-        borderRadius: 12,
-        backgroundColor: '#FFFFFF',
+        borderRadius: 16,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
     },
-    filterButtonActive: {
-        backgroundColor: '#3B82F6',
-        borderColor: '#3B82F6',
-    },
-    filterText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#64748B',
-    },
-    filterTextActive: {
-        color: '#FFFFFF',
+    filterChipText: {
+        fontSize: 13,
+        fontWeight: '700',
     },
     chartCard: {
-        backgroundColor: '#FFFFFF',
         marginHorizontal: 20,
-        marginBottom: 16,
+        marginBottom: 20,
         borderRadius: 24,
         padding: 20,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
     },
     chartHeader: {
         flexDirection: 'row',
@@ -684,21 +934,25 @@ const styles = StyleSheet.create({
     },
     chartTitle: {
         fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1E293B',
+        fontWeight: '800',
+        letterSpacing: -0.3,
         marginBottom: 4,
     },
     chartSubtitle: {
-        fontSize: 13,
-        color: '#64748B',
+        fontSize: 12,
+        fontWeight: '500',
     },
-    chartMenuButton: {
-        padding: 4,
+    chartMenu: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    viewAllText: {
-        fontSize: 14,
-        color: '#3B82F6',
-        fontWeight: '600',
+    chartLoading: {
+        height: 220,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     lineChart: {
         marginVertical: 8,
@@ -709,40 +963,38 @@ const styles = StyleSheet.create({
     },
     categoryList: {
         marginTop: 16,
-        gap: 12,
+        gap: 8,
     },
     categoryItem: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        paddingVertical: 12,
+        paddingVertical: 14,
         paddingHorizontal: 16,
-        backgroundColor: '#F8FAFC',
-        borderRadius: 12,
+        borderRadius: 16,
     },
     categoryLeft: {
         flexDirection: 'row',
         alignItems: 'center',
         flex: 1,
+        gap: 12,
     },
     categoryDot: {
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        marginRight: 12,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
     },
     categoryInfo: {
         flex: 1,
     },
     categoryName: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#1E293B',
+        fontSize: 14,
+        fontWeight: '700',
         marginBottom: 2,
     },
     categoryPercentage: {
-        fontSize: 12,
-        color: '#64748B',
+        fontSize: 11,
+        fontWeight: '500',
     },
     categoryRight: {
         flexDirection: 'row',
@@ -750,38 +1002,87 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     categoryAmount: {
-        fontSize: 15,
-        fontWeight: 'bold',
-        color: '#1E293B',
+        fontSize: 14,
+        fontWeight: '800',
+        letterSpacing: -0.2,
+    },
+    insightCard: {
+        marginHorizontal: 20,
+        marginBottom: 24,
+        borderRadius: 24,
+        overflow: 'hidden',
+    },
+    insightGradient: {
+        padding: 20,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 16,
+    },
+    insightIcon: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    insightContent: {
+        flex: 1,
+    },
+    insightTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        marginBottom: 6,
+        letterSpacing: -0.3,
+    },
+    insightText: {
+        fontSize: 13,
+        fontWeight: '500',
+        lineHeight: 20,
     },
     transactionsSection: {
         paddingHorizontal: 20,
-        marginBottom: 16,
+        marginBottom: 20,
     },
     sectionHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 16,
     },
     sectionTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1E293B',
+        fontSize: 20,
+        fontWeight: '800',
+        letterSpacing: -0.5,
+    },
+    seeAllText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#8B5CF6',
     },
     transactionList: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 20,
+        borderRadius: 24,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
         overflow: 'hidden',
+    },
+    transactionLoading: {
+        padding: 40,
+    },
+    emptyState: {
+        padding: 40,
+        alignItems: 'center',
+        gap: 12,
+    },
+    emptyText: {
+        fontSize: 14,
+        fontWeight: '500',
     },
     transactionItem: {
         flexDirection: 'row',
         alignItems: 'center',
         padding: 16,
         borderBottomWidth: 1,
-        borderBottomColor: '#F1F5F9',
+        borderBottomColor: '#27272A',
     },
     transactionItemLast: {
         borderBottomWidth: 0,
@@ -798,97 +1099,120 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     transactionTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#1E293B',
-        marginBottom: 2,
+        fontSize: 14,
+        fontWeight: '700',
+        marginBottom: 6,
+        letterSpacing: -0.2,
     },
-    transactionCategory: {
-        fontSize: 13,
-        color: '#64748B',
-    },
-    transactionRight: {
+    transactionMeta: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: 8,
+    },
+    categoryBadge: {
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+        borderWidth: 1,
+    },
+    categoryBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+    },
+    transactionDate: {
+        fontSize: 11,
+        fontWeight: '500',
+    },
+    transactionRight: {
+        alignItems: 'flex-end',
     },
     transactionAmount: {
         fontSize: 15,
-        fontWeight: 'bold',
-    },
-    transactionAmountIncome: {
-        color: '#10B981',
-    },
-    transactionAmountExpense: {
-        color: '#1E293B',
-    },
-    insightCard: {
-        marginHorizontal: 20,
-        marginBottom: 20,
-        borderRadius: 20,
-        padding: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    insightIconWrapper: {
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: 'rgba(255, 255, 255, 0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 16,
-    },
-    insightContent: {
-        flex: 1,
-    },
-    insightTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        marginBottom: 4,
-    },
-    insightText: {
-        fontSize: 14,
-        lineHeight: 20,
+        fontWeight: '800',
+        letterSpacing: -0.3,
     },
     modalOverlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
         justifyContent: 'flex-end',
     },
+    modalBackdrop: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+    },
     modalContent: {
-        backgroundColor: '#FFF',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 20,
-        maxHeight: '90%'
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
+        paddingTop: 8,
+        paddingBottom: 40,
+        paddingHorizontal: 20,
+        maxHeight: '80%',
+    },
+    modalHandle: {
+        width: 40,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: '#52525B',
+        alignSelf: 'center',
+        marginBottom: 20,
     },
     modalHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 10
+        alignItems: 'flex-start',
+        marginBottom: 20,
     },
     modalTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1E293B'
+        fontSize: 24,
+        fontWeight: '800',
+        letterSpacing: -0.5,
+        marginBottom: 4,
+    },
+    modalSubtitle: {
+        fontSize: 13,
+        fontWeight: '500',
+    },
+    manageButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 12,
+    },
+    manageButtonText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#8B5CF6',
+    },
+    categoryScroll: {
+        maxHeight: 400,
     },
     categoryOption: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 12,
+        paddingVertical: 16,
+        paddingHorizontal: 16,
+        borderRadius: 16,
+        marginBottom: 8,
         borderBottomWidth: 1,
-        borderBottomColor: '#F1F5F9'
     },
-    categoryIconContainer: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+    categoryOptionIcon: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 12
-    }
+        marginRight: 12,
+    },
+    categoryOptionName: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '700',
+        letterSpacing: -0.2,
+    },
+    checkmark: {
+        marginLeft: 8,
+    },
 });
 
 export default TransactionScreen;

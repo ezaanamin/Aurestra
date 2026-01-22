@@ -4,11 +4,12 @@ import { Appearance } from 'react-native';
 import axios from 'axios';
 import { API_BASE_URL } from '../API_URL';
 import { translations } from '../constants/translations';
+import { theme as headerTheme } from '../constants/theme'; // Rename to avoid conflict with state variable
 
 const SettingsContext = createContext();
 
 export const SettingsProvider = ({ children }) => {
-    const [theme, setTheme] = useState('light'); // 'light', 'dark', 'system'
+    const [themeMode, setThemeMode] = useState('light'); // 'light', 'dark', 'system' (renamed from theme to themeMode)
     const [language, setLanguage] = useState('English');
     const [currency, setCurrency] = useState('PKR');
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -18,8 +19,8 @@ export const SettingsProvider = ({ children }) => {
     }, []);
 
     useEffect(() => {
-        console.log('Settings State Changed:', { theme, language, currency, notificationsEnabled });
-    }, [theme, language, currency, notificationsEnabled]);
+        console.log('Settings State Changed:', { themeMode, language, currency, notificationsEnabled });
+    }, [themeMode, language, currency, notificationsEnabled]);
 
     const loadSettings = async () => {
         try {
@@ -28,7 +29,7 @@ export const SettingsProvider = ({ children }) => {
             const storedCurr = await AsyncStorage.getItem('settings_currency');
             const storedNotif = await AsyncStorage.getItem('settings_notifications');
 
-            if (storedTheme) setTheme(storedTheme);
+            if (storedTheme) setThemeMode(storedTheme);
             if (storedLang) setLanguage(storedLang);
             if (storedCurr) setCurrency(storedCurr);
             if (storedNotif !== null) setNotificationsEnabled(storedNotif === 'true');
@@ -38,7 +39,7 @@ export const SettingsProvider = ({ children }) => {
     };
 
     const updateTheme = async (newTheme) => {
-        setTheme(newTheme);
+        setThemeMode(newTheme);
         await AsyncStorage.setItem('settings_theme', newTheme);
     };
 
@@ -72,12 +73,16 @@ export const SettingsProvider = ({ children }) => {
     };
 
     // Computed dark mode boolean
-    const isDarkMode = theme === 'dark' || (theme === 'system' && Appearance.getColorScheme() === 'dark');
+    const isDarkMode = themeMode === 'dark' || (themeMode === 'system' && Appearance.getColorScheme() === 'dark');
+
+    // Get colors based on mode
+    const colors = isDarkMode ? headerTheme.dark.colors : headerTheme.light.colors;
 
     return (
         <SettingsContext.Provider value={{
-            theme,
+            theme: themeMode, // Expose as 'theme' for backward compatibility if needed, using themeMode internal variable
             isDarkMode,
+            colors, // Expose colors
             language,
             currency,
             notificationsEnabled,

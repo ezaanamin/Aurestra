@@ -6,8 +6,9 @@ import { store } from './API/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { navigationRef } from './navigation/RootNavigation';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { SettingsProvider } from './context/SettingsContext';
-import { registerDeviceToken, fetchUserAccounts, fetchLatestTransactions } from './API/slice/API';
+import { StatusBar, View, ActivityIndicator, Text } from 'react-native';
+import { useSettings, SettingsProvider } from './context/SettingsContext';
+import { registerDeviceToken, fetchUserAccounts, fetchLatestTransactions, fetchUserProfile } from './API/slice/API';
 
 // Screens
 import LoginScreen from './screen/LoginScreen';
@@ -19,12 +20,40 @@ import PaymentMethodsScreen from './screen/PaymentMethodsScreen';
 import FullHistoryScreen from './screen/FullHistoryScreen';
 import LinkedAccountsScreen from './screen/LinkedAccountsScreen';
 import CategoryManagementScreen from './screen/CategoryManagementScreen';
+import FinancialInsightsScreen from './screen/FinancialInsightsScreen';
+import UncategorizedTransactionsScreen from './screen/UncategorizedTransactionsScreen';
 
 const Stack = createStackNavigator();
 
 const App = () => {
+  return (
+    <Provider store={store}>
+      <SettingsProvider>
+        <SafeAreaProvider>
+          <Root />
+        </SafeAreaProvider>
+      </SettingsProvider>
+    </Provider>
+  );
+};
+
+const Root = () => {
   const [initialRoute, setInitialRoute] = useState(null);
   const dispatch = useDispatch();
+  const { isDarkMode, colors } = useSettings();
+
+  // Standard React Navigation Theme Object
+  const navigationTheme = {
+    dark: isDarkMode,
+    colors: {
+      primary: colors.primary,
+      background: colors.background,
+      card: colors.card,
+      text: colors.text,
+      border: colors.border,
+      notification: colors.error,
+    },
+  };
 
   useEffect(() => {
     checkLoginStatus();
@@ -53,7 +82,25 @@ const App = () => {
   const checkLoginStatus = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      setInitialRoute(token ? 'MainTabs' : 'Login');
+      if (token) {
+        // Token exists, verify it with backend
+        try {
+          // We use fetchUserProfile because it is a protected route.
+          // If token is valid, it returns 200.
+          // If invalid/expired, it returns 401, and interceptor/catch handles it.
+          await dispatch(fetchUserProfile()).unwrap();
+
+          // Token is valid and backend is reachable
+          setInitialRoute('MainTabs');
+          registerDeviceToken(token); // Re-register token
+        } catch (e) {
+          console.log('Token/Backend validation failed:', e);
+          // If 401, interceptor might have fired, but we must set initialRoute to ensure App renders
+          setInitialRoute('Login');
+        }
+      } else {
+        setInitialRoute('Login');
+      }
     } catch (error) {
       console.error('Error checking login status:', error);
       setInitialRoute('Login');
@@ -61,46 +108,54 @@ const App = () => {
   };
 
   if (initialRoute === null) {
-    return null; // Or a Splash Screen
+    return (
+      <SafeAreaProvider>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={{ marginTop: 20, color: colors.text }}>Loading Aurestra...</Text>
+        </View>
+      </SafeAreaProvider>
+    );
   }
 
   return (
-    <Provider store={store}>
-      <SettingsProvider>
-        <SafeAreaProvider>
-          <NavigationContainer ref={navigationRef}>
-            <Stack.Navigator
-              screenOptions={{
-                headerShown: false,
-              }}
-              initialRouteName={initialRoute}
-            >
-              <Stack.Screen name="Login" component={LoginScreen} />
-              <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-              <Stack.Screen name="MainTabs" component={MainTabs} />
-              <Stack.Screen
-                name="EditProfile"
-                component={EditProfileScreen}
-              />
-              <Stack.Screen name="LinkedAccounts" component={LinkedAccountsScreen} />
-              <Stack.Screen
-                name="PaymentMethods"
-                component={PaymentMethodsScreen}
-              />
-              <Stack.Screen name="FullHistory" component={FullHistoryScreen} />
-              <Stack.Screen name="CategoryManagement" component={CategoryManagementScreen} />
-              <Stack.Screen
-                name="CurrencyConverter"
-                component={CurrencyConverterScreen}
-                options={{
-                  presentation: 'modal',
-                }}
-              />
-            </Stack.Navigator>
-          </NavigationContainer>
-        </SafeAreaProvider>
-      </SettingsProvider>
-    </Provider>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
+      <StatusBar
+        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
+      />
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background }, // Default background for screens
+        }}
+        initialRouteName={initialRoute}
+      >
+        <Stack.Screen name="Login" component={LoginScreen} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+        <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen
+          name="EditProfile"
+          component={EditProfileScreen}
+        />
+        <Stack.Screen name="LinkedAccounts" component={LinkedAccountsScreen} />
+        <Stack.Screen
+          name="PaymentMethods"
+          component={PaymentMethodsScreen}
+        />
+        <Stack.Screen name="FullHistory" component={FullHistoryScreen} />
+        <Stack.Screen name="CategoryManagement" component={CategoryManagementScreen} />
+        <Stack.Screen name="FinancialInsights" component={FinancialInsightsScreen} />
+        <Stack.Screen name="UncategorizedTransactions" component={UncategorizedTransactionsScreen} />
+        <Stack.Screen
+          name="CurrencyConverter"
+          component={CurrencyConverterScreen}
+          options={{
+            presentation: 'modal',
+          }}
+        />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 };
 

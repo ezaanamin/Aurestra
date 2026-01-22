@@ -13,7 +13,6 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // Switched to Ionicons
 import LinearGradient from 'react-native-linear-gradient';
-import UncategorizedTransactionsModal from '../components/UncategorizedTransactionsModal';
 import StatementModal from '../components/StatementModal';
 import { fetchAllTransactions, updateTransaction, fetchCategories } from '../API/slice/API'; // Added updateTransaction
 import { useSettings } from '../context/SettingsContext';
@@ -91,7 +90,7 @@ const FullHistoryScreen = ({ navigation }) => {
         }
     };
 
-    const { currency } = useSettings();
+    const { currency, colors, isDarkMode } = useSettings();
 
     const formatCurrency = (amount) => {
         return new Intl.NumberFormat('en-PK', {
@@ -105,7 +104,7 @@ const FullHistoryScreen = ({ navigation }) => {
         const isIncome = item.type === 'credit';
         return (
             <TouchableOpacity
-                style={styles.transactionItem}
+                style={[styles.transactionItem, { backgroundColor: colors.card, shadowColor: colors.textSecondary }]}
                 onPress={() => handleEdit(item)}
             >
                 <View style={[styles.iconWrapper, { backgroundColor: isIncome ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)' }]}>
@@ -116,25 +115,25 @@ const FullHistoryScreen = ({ navigation }) => {
                     />
                 </View>
                 <View style={styles.details}>
-                    <Text style={styles.title}>{item.sender || item.purpose || 'Transaction'}</Text>
-                    <Text style={styles.subtitle}>{new Date(item.date).toLocaleDateString()} • {item.purpose}</Text>
+                    <Text style={[styles.title, { color: colors.text }]}>{item.sender || item.purpose || 'Transaction'}</Text>
+                    <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{new Date(item.date).toLocaleDateString()} • {item.purpose}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                     <Text style={[styles.amount, { color: isIncome ? '#10B981' : '#EF4444' }]}>
                         {isIncome ? '+' : '-'}{formatCurrency(item.amount)}
                     </Text>
-                    <Text style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>Edit</Text>
+                    <Text style={{ fontSize: 10, color: colors.textSecondary, marginTop: 2 }}>Edit</Text>
                 </View>
             </TouchableOpacity>
         );
     };
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#1E293B" />
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+            <StatusBar barStyle="light-content" backgroundColor={colors.headerBackground} />
 
             {/* Header */}
-            <LinearGradient colors={['#1E293B', '#334155']} style={styles.header}>
+            <LinearGradient colors={isDarkMode ? ['#020617', '#1E293B'] : ['#1E293B', '#334155']} style={styles.header}>
                 <View style={styles.headerContent}>
                     <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                         <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
@@ -147,12 +146,12 @@ const FullHistoryScreen = ({ navigation }) => {
                 </View>
 
                 {/* Search Bar */}
-                <View style={styles.searchContainer}>
-                    <Ionicons name="search" size={20} color="#94A3B8" style={styles.searchIcon} />
+                <View style={[styles.searchContainer, { backgroundColor: colors.card }]}>
+                    <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
                     <TextInput
-                        style={styles.searchInput}
+                        style={[styles.searchInput, { color: colors.text }]}
                         placeholder="Search transactions..."
-                        placeholderTextColor="#94A3B8"
+                        placeholderTextColor={colors.textSecondary}
                         value={searchText}
                         onChangeText={handleSearch}
                     />
@@ -170,20 +169,8 @@ const FullHistoryScreen = ({ navigation }) => {
                         contentContainerStyle={{ padding: 20 }}
                         showsVerticalScrollIndicator={false}
                         ListEmptyComponent={
-                            <Text style={{ textAlign: 'center', marginTop: 50, color: '#64748B' }}>No transactions found</Text>
+                            <Text style={{ textAlign: 'center', marginTop: 50, color: colors.textSecondary }}>No transactions found</Text>
                         }
-                    />
-                )}
-
-                {/* Edit Modal */}
-                {selectedTransaction && (
-                    <UncategorizedTransactionsModal
-                        visible={showEditModal}
-                        transaction={selectedTransaction}
-                        onClose={(cat, note) => {
-                            if (cat) handleSaveEdit(cat, note);
-                            else setShowEditModal(false);
-                        }}
                     />
                 )}
 

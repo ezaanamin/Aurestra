@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { AppRegistry, PermissionsAndroid, Alert } from 'react-native';
+import { AppRegistry, PermissionsAndroid, Alert, ToastAndroid } from 'react-native';
 import App from './App';
 import { name as appName } from './app.json';
 import { Provider } from 'react-redux';
@@ -15,119 +15,36 @@ import notifee, { AndroidImportance } from '@notifee/react-native';
 import SmsListener from 'react-native-android-sms-listener';
 import SmsAndroid from 'react-native-get-sms-android';
 import { API_BASE_URL } from './API_URL';
-import { registerDeviceToken as registerDeviceTokenThunk, processSMS } from './API/slice/API';
+import { registerDeviceToken as registerDeviceTokenThunk, processSMS, processSMSBatch, setLastSmsCheck, fetchUserAccounts } from './API/slice/API';
+import { readAllSMS, requestSMSPermission, sendLocalNotification } from './utils/smsHelper';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { Config } from './Config';
 
-// --------------------------------------------------
-// Local Notification
-// --------------------------------------------------
-const sendLocalNotification = async (title, message) => {
-  const channelId = await notifee.createChannel({
-    id: 'default',
-    name: 'Default',
-    importance: AndroidImportance.HIGH,
-  });
+// Configure Google Sign-In
+GoogleSignin.configure({
+  webClientId: Config.GOOGLE_WEB_CLIENT_ID,
+  offlineAccess: true,
+  forceCodeForRefreshToken: true,
+  scopes: [
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/drive.file'
+  ],
+});
 
-  await notifee.displayNotification({
-    title,
-    body: message,
-    android: { channelId, smallIcon: 'ic_launcher' },
-  });
-};
+// Configure Google Sign-In
+GoogleSignin.configure({
+  webClientId: Config.GOOGLE_WEB_CLIENT_ID,
+  offlineAccess: true,
+  forceCodeForRefreshToken: true,
+  scopes: [
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/drive.file'
+  ],
+});
 
-// --------------------------------------------------
-// Request SMS Permission
-// --------------------------------------------------
-const requestSMSPermission = async () => {
-  try {
-    const granted = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.READ_SMS,
-      {
-        title: "SMS Permission",
-        message: "App requires access to read your SMS messages.",
-        buttonPositive: "OK"
-      }
-    );
-
-    if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-      console.log("📩 SMS Permission granted");
-      return true;
-    } else {
-      console.log("❌ SMS Permission denied");
-      return false;
-    }
-  } catch (err) {
-    console.warn(err);
-    return false;
-  }
-};
-
-// --------------------------------------------------
-// Read ALL SMS Messages (once at startup)
-// --------------------------------------------------
-const readAllSMS = async () => {
-  const hasPermission = await requestSMSPermission();
-  if (!hasPermission) return;
-
-  const filter = {
-    box: 'inbox',
-    read: 0, // 0 for unread
-  };
-
-  SmsAndroid.list(
-    JSON.stringify(filter),
-    fail => console.log("❌ SMS Fetch Failed:", fail),
-    async (count, smsList) => {
-      console.log("📨 Unread SMS Found:", count);
-      const messages = JSON.parse(smsList);
-
-      const validSenders = ['8810', 'BAHL', 'BankALHabib', 'AL-Habib'];
-      const financeMessages = messages.filter(m => validSenders.includes(m.address));
-
-      console.log(`🔍 Found ${financeMessages.length} unread finance messages.`);
-
-
-      // Load processed IDs to prevent duplicates
-      let processedIds = [];
-      try {
-        const jsonValue = await AsyncStorage.getItem('processed_sms_ids');
-        processedIds = jsonValue != null ? JSON.parse(jsonValue) : [];
-      } catch (e) {
-        console.log('Error loading processed IDs:', e);
-      }
-
-      console.log('📜 Already processed IDs count:', processedIds.length);
-
-      for (const msg of financeMessages) {
-        // Skip if already processed
-        if (processedIds.includes(msg._id)) {
-          continue;
-        }
-
-        try {
-          const result = await store.dispatch(processSMS({
-            message: msg.body,
-            sender: msg.address
-          })).unwrap();
-
-          if (result.status === 'success') {
-            const txn = result.transaction;
-
-            // Mark as processed locally
-            processedIds.push(msg._id);
-            await AsyncStorage.setItem('processed_sms_ids', JSON.stringify(processedIds));
-
-            await sendLocalNotification(
-              'New Transaction Synced',
-              `${txn.type.toUpperCase()}: PKR ${txn.amount} at ${txn.receiver || txn.sender || 'Merchant'}`
-            );
-          }
-        } catch (err) {
-          console.log('❌ Failed to process unread SMS:', err);
-        }
-      }
-    }
-  );
-};
+// SMS logic moved to utils/smsHelper.js
 
 // --------------------------------------------------
 // Parse Finance SMS from 8810
@@ -176,8 +93,8 @@ const listenForUnreadFinanceSMS = async () => {
   if (!hasPermission) return;
 
   SmsListener.addListener(async (message) => {
-    // Only process SMS from 8810 or BAHL
-    const validSenders = ['8810', 'BAHL', 'BankALHabib', 'AL-Habib'];
+    // Only process SMS from 8810, 8812, or BAHL
+    const validSenders = ['8810', '8812', 'BAHL', 'BankALHabib', 'AL-Habib'];
     if ((validSenders.includes(message.originatingAddress)) && message.read === 0) {
       console.log('💰 New Unread Finance SMS detected from:', message.originatingAddress);
 
@@ -191,6 +108,9 @@ const listenForUnreadFinanceSMS = async () => {
         console.log('✅ SMS Processed:', result);
 
         if (result.status === 'success') {
+          // REFRESH ACCOUNTS IMMEDIATELY TO UPDATE BALANCE ON UI
+          store.dispatch(fetchUserAccounts());
+
           const txn = result.transaction;
           await sendLocalNotification(
             'New Transaction',
@@ -249,7 +169,20 @@ const checkNewEasypaisaTransactions = async () => {
 const onBackgroundFetch = async (taskId) => {
   console.log('[BackgroundFetch] Task executed:', taskId);
 
-  await checkNewEasypaisaTransactions();
+  // Only run protected background tasks if user is authenticated
+  try {
+    const userToken = await AsyncStorage.getItem('userToken');
+    if (userToken) {
+      await checkNewEasypaisaTransactions();
+
+      // Check SMS in background (silent mode)
+      await readAllSMS(true);
+    }
+    // otherwise: skip protected background tasks (silent)
+  } catch (err) {
+    // silent error handling
+  }
+
   BackgroundFetch.finish(taskId);
 };
 
@@ -288,22 +221,31 @@ const initApp = async () => {
     const authStatus = await messaging().requestPermission();
     console.log('[FCM] Permission:', authStatus);
 
-    await registerDeviceToken();
-    await checkNewEasypaisaTransactions();
-    await sendLocalNotification('Test Notification', 'App started successfully');
+    // Only perform device registration and protected checks if user is logged in
+    try {
+      const userToken = await AsyncStorage.getItem('userToken');
+      if (userToken) {
+        await registerDeviceToken();
+        await checkNewEasypaisaTransactions();
+      }
+    } catch (err) {
+      // silent error handling
+    }
 
     configureBackgroundFetch();
 
     // Read all SMS once at startup
+    console.log('🚀 App Loaded: Starting initial SMS check...');
     await readAllSMS();
 
     // Listen for unread 8810 finance SMS
     await listenForUnreadFinanceSMS();
 
     // Setup 5-minute periodic sync
+    // Setup 5-minute periodic sync (Foreground)
     setInterval(() => {
-      console.log('⏱️ Periodic 5-min sync starting...');
-      readAllSMS();
+      console.log('⏰ 5-Minute Timer Triggered: Checking SMS...');
+      readAllSMS(true); // Treat as background to avoid perms popup
     }, 5 * 60 * 1000);
 
   } catch (err) {

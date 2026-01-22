@@ -1,16 +1,19 @@
 import React from 'react';
 import { Modal, View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettings } from '../context/SettingsContext';
 
 const { width } = Dimensions.get('window');
 
 const CustomModal = ({ visible, onClose, title, message, type = 'info', onConfirm, confirmText = 'OK', cancelText = 'Cancel' }) => {
+    const { colors } = useSettings();
+
     const getIcon = () => {
         switch (type) {
-            case 'success': return { name: 'check-circle', color: '#10B981' };
-            case 'error': return { name: 'alert-circle', color: '#EF4444' };
-            case 'confirm': return { name: 'help-circle', color: '#3B82F6' };
-            default: return { name: 'information', color: '#64748B' };
+            case 'success': return { name: 'check-circle', color: colors.success };
+            case 'error': return { name: 'alert-circle', color: colors.error };
+            case 'confirm': return { name: 'help-circle', color: colors.info };
+            default: return { name: 'information', color: colors.icon };
         }
     };
 
@@ -23,19 +26,22 @@ const CustomModal = ({ visible, onClose, title, message, type = 'info', onConfir
             animationType="fade"
             onRequestClose={onClose}
         >
-            <View style={styles.overlay}>
-                <View style={styles.container}>
+            <View style={[styles.overlay, { backgroundColor: colors.modalOverlay }]}>
+                <View style={[styles.container, { backgroundColor: colors.card }]}>
                     <View style={[styles.iconWrapper, { backgroundColor: iconData.color + '20' }]}>
                         <Icon name={iconData.name} size={32} color={iconData.color} />
                     </View>
 
-                    <Text style={styles.title}>{title}</Text>
-                    <Text style={styles.message}>{message}</Text>
+                    <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+                    <Text style={[styles.message, { color: colors.textSecondary }]}>{message}</Text>
 
                     <View style={styles.buttonContainer}>
                         {type === 'confirm' && (
-                            <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-                                <Text style={styles.cancelButtonText}>{cancelText}</Text>
+                            <TouchableOpacity
+                                style={[styles.cancelButton, { borderColor: colors.border }]}
+                                onPress={onClose}
+                            >
+                                <Text style={[styles.cancelButtonText, { color: colors.textSecondary }]}>{cancelText}</Text>
                             </TouchableOpacity>
                         )}
 
@@ -59,14 +65,12 @@ const CustomModal = ({ visible, onClose, title, message, type = 'info', onConfir
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
         justifyContent: 'center',
         alignItems: 'center',
         padding: 20
     },
     container: {
         width: width - 60,
-        backgroundColor: 'white',
         borderRadius: 24,
         padding: 24,
         alignItems: 'center',
@@ -87,13 +91,11 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#1E293B',
         textAlign: 'center',
         marginBottom: 8,
     },
     message: {
         fontSize: 15,
-        color: '#64748B',
         textAlign: 'center',
         marginBottom: 24,
         lineHeight: 22
@@ -108,13 +110,11 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
         alignItems: 'center',
     },
     cancelButtonText: {
         fontSize: 16,
         fontWeight: '600',
-        color: '#64748B',
     },
     confirmButton: {
         paddingVertical: 12,
