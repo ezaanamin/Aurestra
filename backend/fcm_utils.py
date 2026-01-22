@@ -3,9 +3,34 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import os
 
+import json
+
 if not firebase_admin._apps:
-    cred = credentials.Certificate(os.getenv("FIREBASE_CRED_PATH"))
-    firebase_admin.initialize_app(cred)
+    cred = None
+    
+    # Priority 1: JSON String from Env (Production/Render)
+    firebase_json = os.getenv("FIREBASE_CREDENTIALS")
+    if firebase_json:
+        try:
+            cred_dict = json.loads(firebase_json)
+            cred = credentials.Certificate(cred_dict)
+            print("🔥 Firebase initialized via FIREBASE_CREDENTIALS env var")
+        except Exception as e:
+            print(f"❌ Failed to parse FIREBASE_CREDENTIALS env: {e}")
+
+    # Priority 2: File Path (Local Development)
+    if not cred and os.getenv("FIREBASE_CRED_PATH"):
+        cred_path = os.getenv("FIREBASE_CRED_PATH")
+        if os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            print(f"🔥 Firebase initialized via file: {cred_path}")
+        else:
+            print(f"⚠️ FIREBASE_CRED_PATH defined but file not found: {cred_path}")
+
+    if cred:
+        firebase_admin.initialize_app(cred)
+    else:
+        print("⚠️ Firebase not initialized: No credentials found.")
 
 def send_push_to_all(title, body, tokens=None):
     if tokens is None:
