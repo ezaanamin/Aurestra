@@ -42,3 +42,4 @@ migrations/10_create_financial_insights_table.sql
 migrations/11_create_statement_analysis_table.sql
 seeders/001_seed_users.sql
 seeders/002_seed_categories.sql
+*.apk

@@ -1,97 +1,100 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Aurestra - Smart Financial Manager 💰
 
-# Getting Started
+Aurestra is a next-generation personal finance application built with React Native. It automatically tracks your expenses by parsing transactional SMS from major Pakistani banks and wallets, providing real-time insights into your financial health without manual data entry.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## 🌟 Key Features
 
-## Step 1: Start Metro
+### 📨 Smart SMS Sync (The "Magic" Feature)
+- **Automated Tracking**: Automatically reads transactional SMS from **Bank Al Habib**, **Easypaisa**, and **JazzCash**.
+- **Intelligent Checkpoints**: 
+  - To ensure lightning-fast performance, the app uses a **Checkpoint System**.
+  - **First Run**: Defaults to scanning from **Jan 24, 2026** (to skip years of old history).
+  - **Subsequent Runs**: Remembers exactly when the last sync occurred (e.g., "Jan 25, 11:30 PM") and **only** scans messages received after that second.
+  - **Zero-Lag**: Even if no new messages arrive, the checkpoint updates to "Now", ensuring the next sync is always instant.
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+### 📊 Financial Dashboard
+- **Glassmorphic UI**: Beautiful, modern interface with dark mode support.
+- **Real-time Balance**: Aggregated total balance from all linked accounts.
+- **Income vs Expense**: Visual progress bars and monthly summaries.
+- **Recent Transactions**: Quick view of your latest spending.
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+### 🛠️ Tools & Utilities
+- **Currency Converter**: Real-time exchange rates (PKR, USD, EUR, etc.) with offline caching.
+- **Category Management**: Create custom categories with custom icons (Entertainment, Food, etc.).
+- **Budget Alerts**: Set monthly limits and get warned when nearing them.
+- **Safe & Secure**: Google Login integration and local encryption.
 
-```sh
-# Using npm
-npm start
+---
 
-# OR using Yarn
-yarn start
-```
+## 🚀 Getting Started
 
-## Step 2: Build and run your app
+### Prerequisites
+- Node.js & npm/yarn
+- Android Studio & SDK
+- React Native CLI
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+### Installation
 
-### Android
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/your-username/aurestra.git
+   cd Aurestra/Aurestra
+   ```
 
-```sh
-# Using npm
-npm run android
+2. **Install Dependencies**
+   ```bash
+   npm install
+   # or
+   yarn install
+   ```
 
-# OR using Yarn
-yarn android
-```
+3. **Setup Environment**
+   - Ensure `android/local.properties` has your SDK path.
+   - Configure Firebase `google-services.json` in `android/app/`.
 
-### iOS
+4. **Run the App**
+   ```bash
+   npx react-native run-android
+   ```
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+---
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+## 📱 Permissions Logic (Android 13+)
 
-```sh
-bundle install
-```
+The app requests two critical permissions to function:
+1. **READ_SMS**: To parse bank transactions.
+2. **POST_NOTIFICATIONS**: To alert you when new transactions are added in the background.
 
-Then, and every time you update your native dependencies, run:
+*Note: The app never uploads your raw SMS content. It processes them locally on-device and only sends structured transaction data (Amount, Merchant, Date) to the secured backend.*
 
-```sh
-bundle exec pod install
-```
+---
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+## ⚙️ efficient-sync-explained.md
 
-```sh
-# Using npm
-npm run ios
+> **Why is the sync so fast?**
 
-# OR using Yarn
-yarn ios
-```
+The sync logic in `smsHelper.js` is optimized for performance:
+1. **Checkpointing**: It stores `last_sms_scan_timestamp` in `AsyncStorage`.
+2. **Gap Filling**: If you don't open the app for 5 days, it pulls *only* those 5 days of messages.
+3. **Empty States**: If you sync and find nothing, it still updates the timestamp to "Now", preventing redundant re-scanning of empty periods.
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+---
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+## 📦 Build & Deployment
 
-## Step 3: Modify your app
+To build a release APK:
 
-Now that you have successfully run the app, let's make changes!
+1. **Generate Keystore**: Ensure your release keystore is in `android/app/`.
+2. **Build Command**:
+   ```bash
+   cd android
+   ./gradlew assembleRelease
+   ```
+3. **Artifact**: The APK will be generated in `android/app/build/outputs/apk/release/`.
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+> **Note**: `*.apk` files are git-ignored to keep the repo clean.
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+---
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+**Version**: 1.1.0  
+**Built with**: React Native, Redux Toolkit, NativeBase

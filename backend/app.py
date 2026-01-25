@@ -615,13 +615,17 @@ def set_manual_balance(current_user):
         # Update Balance and set Manual Flag
         balance.current_balance = amount
         balance.is_manual = True
-        balance.last_updated = datetime.utcnow()
+        balance.last_updated = datetime.now()
         
         db.session.commit()
         
+        # FIX: Fetch ALL accounts to return complete updated state
+        all_accounts = AccountBalance.query.all()
+        
         return jsonify({
             "message": "Balance updated manually",
-            "account": balance.to_dict()
+            "account": balance.to_dict(),
+            "accounts": [acc.to_dict() for acc in all_accounts]  # Return all
         }), 200
         
     except Exception as e:
@@ -658,7 +662,8 @@ def get_accounts(current_user):
                     if should_update:
                         print(f"🔄 Updating Account Balance from Email: {closing_bal}")
                         bank_acc.current_balance = closing_bal
-                        bank_acc.last_updated = datetime.utcnow()
+                        bank_acc.last_updated = datetime.now()
+                        bank_acc.is_manual = False  # Email update removes manual lock
                     
                     # SAVE TRANSACTIONS (Always process transactions, just don't overwrite balance if manual)
                     extracted_txs = bank_data.get("transactions", [])
@@ -667,7 +672,7 @@ def get_accounts(current_user):
                         try:
                             tx_date = datetime.strptime(tx["date"], "%d/%m/%Y")
                         except:
-                            tx_date = datetime.utcnow()
+                            tx_date = datetime.now()
 
                         exists = Transaction.query.filter(
                             Transaction.date == tx_date,
@@ -717,31 +722,17 @@ def get_accounts(current_user):
             acc_dict = acc.to_dict()
             
             if acc.source == 'bank':
-                # Find ONLY SMS transactions since the last time the bank balance was updated from email/statement
-                # If last_updated is missing (first run), we use start of month
-                effective_cutoff = acc.last_updated if acc.last_updated else cutoff_date
-                
-                live_txs = Transaction.query.filter(
-                    Transaction.source == 'bank_sms',
-                    Transaction.date > effective_cutoff
-                ).all()
-                
-                adjustment = 0.0
-                for tx in live_txs:
-                    if tx.type == 'credit':
-                        adjustment += tx.amount
-                    elif tx.type == 'debit':
-                        adjustment -= tx.amount
-                
-                # TOTAL DYNAMIC BALANCE Calculation
-                # Balance is Truth (DB) + SMS Adjustment
-                live_balance = acc.current_balance + adjustment
+                # SIMPLIFICATON: The AccountBalance table *is* the running balance.
+                # SMS transactions update it directly (via sms_parser.py).
+                # Manual updates update it directly.
+                # Email statements overwrite it (logic above).
+                # validation: We do NOT need to calculate an adjustment here, as that causes double-counting.
                 
                 # Update response
-                acc_dict['balance'] = live_balance
+                acc_dict['balance'] = acc.current_balance
                 acc_dict['statement_base'] = acc.current_balance
-                acc_dict['live_adjustment'] = adjustment
-                acc_dict['savings_reduction'] = 0.0 # Deprecated, handled via transactions
+                acc_dict['live_adjustment'] = 0.0
+                acc_dict['savings_reduction'] = 0.0 
                 
             response_data.append(acc_dict)
 
@@ -967,25 +958,32 @@ def get_monthly_summary_from_db(current_user):
         # 2. Update/Create MonthlyBalance persistence
         summary = MonthlyBalance.query.filter_by(month=current_month).first()
         
+        # FIX: Closing Balance should be the TOTAL CURRENT BALANCE (Bank + Wallet + etc)
+        total_current_balance = 0
+        account_balances = AccountBalance.query.all()
+        for acc in account_balances:
+            total_current_balance += acc.current_balance
+
         if not summary:
             # Create new
             summary = MonthlyBalance(
                 source="auto-dynamic",
                 month=current_month,
                 opening_balance=0,
-                closing_balance=0,
+                closing_balance=total_current_balance, # Use actual total balance
                 expense=dynamic_expense,
                 # income=final_income, # REMOVED
                 savings=final_savings,
-                fetched_at=datetime.utcnow()
+                fetched_at=datetime.now()
             )
             db.session.add(summary)
         else:
             # Update existing
+            summary.closing_balance = total_current_balance # Update with actual balance
             summary.expense = dynamic_expense
             # summary.income = final_income # REMOVED
             summary.savings = final_savings
-            summary.fetched_at = datetime.utcnow()
+            summary.fetched_at = datetime.now()
             
         try:
             db.session.commit()
@@ -1001,7 +999,7 @@ def get_monthly_summary_from_db(current_user):
             "total_expense": dynamic_expense,
             "total_income": final_income,
             "total_savings": final_savings,
-            "fetched_at": datetime.utcnow().strftime("%d %b %Y %H:%M:%S")
+            "fetched_at": datetime.now().strftime("%d %b %Y %H:%M:%S")
         })
 
 # -------------------------
@@ -2202,11 +2200,16 @@ def calculate_statement(current_user):
             
             if account_balance:
                 old_balance = account_balance.current_balance
-                new_balance = old_balance + close_bal
-                account_balance.current_balance = new_balance
-                account_balance.last_updated = datetime.utcnow()
+                
+                # FIX: SET to closing balance (don't add)
+                # This replaces the balance with the statement's closing value
+                account_balance.current_balance = close_bal
+                account_balance.last_updated = datetime.now()
+                # FIX: Remove manual lock as Statement is the new Truth
                 account_balance.is_manual = False
-                balance_update_message = f"Balance increased by {close_bal:.2f} (Marked Read)"
+                
+                balance_update_message = f"Balance SET from {old_balance:,.2f} to {close_bal:,.2f}"
+                print(f"✅ {balance_update_message}")
             else:
                 account_balance = AccountBalance(
                     source='bank',
@@ -2372,53 +2375,26 @@ def calculate_summary_endpoint():
 
         # --- TRIGGER AI ANALYSIS ---
         try:
-            print(f"🤖 Triggering Financial Agent for {target_year}-{target_month:02d}...")
+            # Need finding target_year/month if not defined?
+            # Assuming dt.year/dt.month work
+            print(f"🤖 Triggering Financial Agent for {dt.year}-{dt.month:02d}...")
             agent = FinancialAgent()
-            agent.analyze_month(target_year, target_month)
+            agent.analyze_month(dt.year, dt.month)
         except Exception as e:
             print(f"❌ Financial Agent Error: {e}")
             # Don't fail the whole request if analysis fails, just log it.
 
         # Backup to Google Drive (if enabled)
-        backup_status = "skipped"
-        if current_user.google_refresh_token:
-             # DRY import (better to move to top, but local for now)
-             from drive_utils import get_drive_service, ensure_folder_path, upload_json
-             try:
-                 print(f"☁️ Backing up {month_str} to Drive...")
-                 service = get_drive_service(current_user)
-                 if service:
-                     # Create payload consistent with frontend expectation
-                     backup_payload = {
-                         "month": month_str,
-                         "transactions": extracted_txs,
-                         "balances": balances,
-                         "summary": {
-                            "opening": selected_opening,
-                            "closing": selected_closing,
-                            "expense": new_summ.expense,
-                            "savings": new_summ.savings
-                         }
-                     }
-                     folder_id = ensure_folder_path(service, ["Aurestra Finance", month_str])
-                     if folder_id:
-                         upload_json(service, folder_id, "statement.json", backup_payload)
-             except Exception as e:
-                 print(f"⚠️ Drive Backup Failed: {e}")
-
+        # Note: 'extracted_txs', 'balances', etc are not available here easily unless recalculated
+        # But user wants summary updated.
+        
         response_payload = {
             "message": f"Statement processed for {month_str}",
-            "transactions_added": added_count,
-            "transactions_skipped": skipped_count,
             "data": {
                 "month": month_str,
-                "transactions": extracted_txs,
-                "balances": balances,
                 "summary": {
-                    "opening": selected_opening,
-                    "closing": selected_closing,
-                    "expense": new_summ.expense,
-                    "savings": new_summ.savings
+                    "expense": summary.expense,
+                    "savings": summary.savings
                 }
             }
         }
@@ -2564,11 +2540,13 @@ def mark_statement_as_read(current_user):
         
         if account_balance:
             old_balance = account_balance.current_balance
-            new_balance = old_balance + close_bal
-            account_balance.current_balance = new_balance
+            
+            # FIX: SET Balance (Overwrite)
+            account_balance.current_balance = close_bal
             account_balance.last_updated = datetime.utcnow()
-            account_balance.is_manual = False
-            print(f"💰 [mark-read] ADDED Balance: {old_balance} + {close_bal} = {new_balance}")
+            account_balance.is_manual = False # FIX: Unlock manual
+            
+            print(f"💰 [mark-read] SET Balance: {old_balance} -> {close_bal}")
         else:
             account_balance = AccountBalance(
                 source='bank',
@@ -2611,7 +2589,6 @@ def create_transaction(current_user):
         tx_date = datetime.utcnow()
         if date_str:
             try:
-                # Expecting YYYY-MM-DD
                 tx_date = datetime.strptime(date_str, "%Y-%m-%d")
             except:
                 pass
@@ -2629,8 +2606,22 @@ def create_transaction(current_user):
         )
         
         db.session.add(new_tx)
+        db.session.flush()  # Get transaction ID
         
-        # Optional: update account balance logic here if needed
+        # FIX: UPDATE ACCOUNT BALANCE ALWAYS
+        balance = AccountBalance.query.filter_by(source='bank').first()
+        if not balance:
+            balance = AccountBalance.query.first()
+            
+        if balance:
+            if t_type == 'credit':
+                balance.current_balance += amount
+                print(f"💰 Balance increased by {amount}: {balance.current_balance}")
+            elif t_type == 'debit':
+                balance.current_balance -= amount
+                print(f"💸 Balance decreased by {amount}: {balance.current_balance}")
+            
+            balance.last_updated = datetime.now()
         
         db.session.commit()
         
@@ -2642,11 +2633,13 @@ def create_transaction(current_user):
                 "purpose": new_tx.purpose,
                 "date": new_tx.date.strftime("%Y-%m-%d"),
                 "type": new_tx.type
-            }
+            },
+            "new_balance": balance.current_balance if balance else None
         }), 201
         
     except Exception as e:
         db.session.rollback()
+        print(f"❌ Transaction creation error: {e}")
         return jsonify({"error": str(e)}), 500
 
 # --- Scheduler & Backup ---

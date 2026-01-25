@@ -511,10 +511,15 @@ def process_bank_sms(message, sender='BAHL'):
             balance = AccountBalance(source=target_source, current_balance=0.0)
             db.session.add(balance)
             
+        # ALWAYS UPDATE for SMS
         if transaction.type == 'credit':
             balance.current_balance += transaction.amount
+            # print(f"📥 SMS Credit: +{transaction.amount} → {balance.current_balance}")
         else:
             balance.current_balance -= transaction.amount
+            # print(f"📤 SMS Debit: -{transaction.amount} → {balance.current_balance}")
+        
+        balance.last_updated = datetime.now()
             
         db.session.commit()
         

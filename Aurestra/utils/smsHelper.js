@@ -93,7 +93,10 @@ export const readAllSMS = async (isBackground = false) => {
     }
 
     // Tell Android to only give us messages since that threshold
-    const fetchThreshold = scanThreshold;
+    // MODIFIED: Fetch last 14 days of messages regardless of sync time, so we can display the "Last Banking Message" correctly.
+    // We will still only PROCESS messages newer than lastRunTimestamp.
+    const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
+    const fetchThreshold = Date.now() - FOURTEEN_DAYS;
 
     const filter = {
         box: 'inbox',
@@ -124,6 +127,7 @@ export const readAllSMS = async (isBackground = false) => {
 
                     // Relaxed 'isNew' for manual sync: use scanThreshold instead of lastRunTimestamp
                     // This allows re-processing missed messages if parser was fixed.
+                    // STRICT CHECK: Only process what is newer than our last success point
                     const isNew = m.date > (isBackground ? lastRunTimestamp : scanThreshold);
                     return isFinance && isNew;
                 });
@@ -137,11 +141,15 @@ export const readAllSMS = async (isBackground = false) => {
                 });
 
                 // Find the most recent banking messages (last 5)
+                // Restore recentBankingMessages for modal logic
                 const oneHourAgo = Date.now() - (60 * 60 * 1000);
                 const recentBankingMessages = allFinanceMessages.filter(m => m.date > oneHourAgo);
+
+                // Strictly for DISPLAY (ignore sync timestamp)
                 const lastBankingMessages = allFinanceMessages
                     .sort((a, b) => b.date - a.date)
                     .slice(0, 5); // Get last 5 banking messages
+
 
                 // Get last 50 scanned messages for debugging UI
                 const recentMessages = messages
