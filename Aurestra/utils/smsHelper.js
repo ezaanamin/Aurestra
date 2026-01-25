@@ -21,24 +21,22 @@ export const sendLocalNotification = async (title, message) => {
 
 export const requestSMSPermission = async () => {
     try {
-        const granted = await PermissionsAndroid.request(
+        const permissionsToRequest = [
             PermissionsAndroid.PERMISSIONS.READ_SMS,
-            {
-                title: "SMS Permission",
-                message: "App requires access to read your SMS messages.",
-                buttonPositive: "OK"
-            }
-        );
+            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        ];
 
-        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-            console.log("📩 SMS Permission granted");
+        const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest);
+
+        const smsGranted = granted[PermissionsAndroid.PERMISSIONS.READ_SMS] === PermissionsAndroid.RESULTS.GRANTED;
+        const notifGranted = granted[PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS] === PermissionsAndroid.RESULTS.GRANTED;
+
+        if (smsGranted) {
             return true;
         } else {
-            console.log("❌ SMS Permission denied");
             return false;
         }
     } catch (err) {
-        console.warn(err);
         return false;
     }
 };
@@ -47,14 +45,17 @@ export const requestSMSPermission = async () => {
 // Read ALL SMS Messages (once at startup or background)
 // --------------------------------------------------
 export const readAllSMS = async (isBackground = false) => {
-    console.log(`📱 readAllSMS called. isBackground: ${isBackground}`);
+
+
+    // Store the current check time
+    const currentCheckTime = Date.now();
 
     // 1. Check Permissions
     let hasPermission = false;
     if (isBackground) {
         hasPermission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_SMS);
         if (!hasPermission) {
-            console.log('Background SMS check skipped: No permission');
+
             return;
         }
     } else {
@@ -68,41 +69,47 @@ export const readAllSMS = async (isBackground = false) => {
         const storedTs = await AsyncStorage.getItem('last_sms_scan_timestamp');
         if (storedTs) {
             lastRunTimestamp = parseInt(storedTs, 10);
-            console.log(`🕒 Last Scan Timestamp: ${new Date(lastRunTimestamp).toLocaleString()}`);
+        } else {
+            // Fallback: If we have NO timestamp, try to find the LATEST banking message available in the inbox right now,
+            // and start from there? No, that would skip history.
+            // If no timestamp, we MUST scan back.
+            // But maybe the user implies we should save the timestamp more aggressively?
         }
     } catch (e) {
-        console.log('⚠️ Error loading timestamp, defaulting to 0');
+
     }
 
-    // 3. Scan Filter (Lookback 30 days max to be safe if timestamp is missing)
-    const minDate = new Date();
-    minDate.setDate(minDate.getDate() - 30);
-
-    // Use the LATER of (Now - 30 days) OR (Last Run Timestamp)
-    // For manual sync, we always look back at least 24 hours to recover from stuck cursors
-    let scanThreshold = Math.max(minDate.getTime(), lastRunTimestamp);
+    // 3. Scan Filter
+    // User Requirement: Start scan from last known timestamp.
+    // User Requirement: Start scan from last known timestamp.
+    // If NO timestamp (fresh install), default to Jan 24, 2026.
+    // NOTE: This default is ONLY used for the very first sync. 
+    // After the first run, the app saves the current time to AsyncStorage, so future syncs will be instant.
+    const DEFAULT_START_DATE = new Date('2026-01-24T00:00:00').getTime();
+    const scanThreshold = lastRunTimestamp > 0 ? lastRunTimestamp : DEFAULT_START_DATE;
 
     if (!isBackground) {
-        const forceLookback = new Date().getTime() - (24 * 60 * 60 * 1000);
-        scanThreshold = Math.min(scanThreshold, forceLookback);
-        console.log(`🔄 Manual Sync: Forcing 24h lookback. Threshold: ${new Date(scanThreshold).toLocaleString()}`);
+
     }
+
+    // Tell Android to only give us messages since that threshold
+    const fetchThreshold = scanThreshold;
 
     const filter = {
         box: 'inbox',
-        minDate: scanThreshold,
+        minDate: fetchThreshold,
     };
 
     return new Promise((resolve) => {
         SmsAndroid.list(
             JSON.stringify(filter),
             fail => {
-                console.log("❌ SMS Fetch Failed:", fail);
-                resolve(false);
+
+                resolve({ error: "SMS List Failed: " + JSON.stringify(fail) });
             },
             async (count, smsList) => {
                 const messages = JSON.parse(smsList);
-                console.log(`📨 Scanned ${messages.length} total messages from inbox since threshold.`);
+
 
                 // Update Debug Timer in Redux
                 store.dispatch(setLastSmsCheck(Date.now()));
@@ -121,20 +128,73 @@ export const readAllSMS = async (isBackground = false) => {
                     return isFinance && isNew;
                 });
 
-                console.log(`🔍 Matches found: ${newFinanceMessages.length}`);
+
+
+                // Get ALL finance messages for last banking message display
+                const allFinanceMessages = messages.filter(m => {
+                    const addressStr = (m.address || "").toUpperCase();
+                    return validSenders.some(s => addressStr.endsWith(s.toUpperCase()));
+                });
+
+                // Find the most recent banking messages (last 5)
+                const oneHourAgo = Date.now() - (60 * 60 * 1000);
+                const recentBankingMessages = allFinanceMessages.filter(m => m.date > oneHourAgo);
+                const lastBankingMessages = allFinanceMessages
+                    .sort((a, b) => b.date - a.date)
+                    .slice(0, 5); // Get last 5 banking messages
+
+                // Get last 50 scanned messages for debugging UI
+                const recentMessages = messages
+                    .sort((a, b) => b.date - a.date) // Newest first
+                    .slice(0, 50)
+                    .map(m => {
+                        const addressStr = (m.address || "").toUpperCase();
+                        const isFinance = validSenders.some(s => addressStr.endsWith(s.toUpperCase()));
+                        const isNew = m.date > (isBackground ? lastRunTimestamp : scanThreshold);
+
+                        // Friendly Name Mapping
+                        let displayName = m.address;
+                        if (addressStr.endsWith('8810')) displayName = 'Easypaisa';
+                        else if (addressStr.endsWith('8812')) displayName = 'JazzCash';
+                        else if (addressStr.includes('BAHL') || addressStr.includes('HABIB')) displayName = 'Bank Al Habib';
+                        else if (addressStr.endsWith('3737')) displayName = 'Easypaisa';
+
+                        return {
+                            address: displayName, // Use friendly name for UI
+                            originalAddress: m.address,
+                            body: m.body,
+                            date: m.date,
+                            status: (isFinance && isNew) ? 'READ' : 'NOT READ'
+                        };
+                    });
 
                 if (newFinanceMessages.length === 0) {
-                    console.log("✅ Up to date.");
+                    // CRITICAL: Update timestamp so we don't re-scan this empty period next time!
+                    await AsyncStorage.setItem('last_sms_scan_timestamp', currentCheckTime.toString());
+
                     if (!isBackground) {
-                        // DEBUG: If no matches, show what senders WE DID see (Sender Probe)
-                        const uniqueSenders = [...new Set(messages.map(m => m.address))].slice(0, 3);
-                        const debugMsg = messages.length > 0
-                            ? `Scanned ${messages.length} SMS. Found senders: [${uniqueSenders.join(', ')}]. No bank matches.`
-                            : "No new SMS found in inbox.";
-                        ToastAndroid.show(debugMsg, ToastAndroid.LONG);
+                        // Return empty stats so UI can show "Up to Date" modal
+                        resolve({
+                            created: 0,
+                            skipped: 0,
+                            failed: 0,
+                            total: 0,
+                            recentMessages: recentMessages,
+                            lastCheckTime: currentCheckTime,
+                            lastBankingMessages: lastBankingMessages,
+                            hasRecentBankingMessages: recentBankingMessages.length > 0,
+                            scanFromDate: scanThreshold
+                        });
+                    } else {
+                        resolve(null);
                     }
-                    resolve(null); // Return null instead of true to indicate "no new messages to process"
                     return;
+                }
+
+                // User requested limit: Latest 5 only to avoid Rate Limits
+                newFinanceMessages.sort((a, b) => b.date - a.date); // Newest first
+                if (newFinanceMessages.length > 5) {
+                    newFinanceMessages = newFinanceMessages.slice(0, 5);
                 }
 
                 // Sort by Date Ascending (Oldest First) to process in order
@@ -149,39 +209,97 @@ export const readAllSMS = async (isBackground = false) => {
                 }));
 
                 // Send to Backend
-                console.log(`🚀 Sending batch of ${batchPayload.length} messages...`);
+                const CHUNK_SIZE = 5;
+                let aggregateResult = { created: 0, skipped: 0, failed: 0, transactions: [], errors: [] };
+
+
+
+                // Helper for delay
+                const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
                 try {
-                    const result = await store.dispatch(processSMSBatch(batchPayload)).unwrap();
+                    for (let i = 0; i < batchPayload.length; i += CHUNK_SIZE) {
+                        const chunk = batchPayload.slice(i, i + CHUNK_SIZE);
+                        const chunkIndex = Math.floor(i / CHUNK_SIZE) + 1;
+                        const totalChunks = Math.ceil(batchPayload.length / CHUNK_SIZE);
 
-                    if (result) {
-                        console.log(`✅ Batch Synced: Created ${result.created}, Skipped ${result.skipped}, Failed ${result.failed}`);
-                        if (result.errors && result.errors.length > 0) {
-                            console.log('❌ Parsing Errors from Backend:', JSON.stringify(result.errors, null, 2));
+
+
+                        let attempts = 0;
+                        let success = false;
+
+                        while (attempts < 3 && !success) {
+                            try {
+
+
+                                // Dispatch
+                                const result = await store.dispatch(processSMSBatch(chunk)).unwrap();
+
+                                if (result) {
+                                    aggregateResult.created += (result.created || 0);
+                                    aggregateResult.skipped += (result.skipped || 0);
+                                    aggregateResult.failed += (result.failed || 0);
+                                    if (result.transactions) aggregateResult.transactions.push(...result.transactions);
+                                    if (result.errors) aggregateResult.errors.push(...result.errors);
+                                }
+                                success = true;
+
+                            } catch (error) {
+                                attempts++;
+                                const errMsg = error?.message || error?.toString() || "";
+
+                                if (errMsg.includes("Rate limit")) {
+
+                                    await wait(10000 * attempts); // Exponential wait: 10s, 20s...
+                                } else {
+
+                                    await wait(2000);
+                                }
+                            }
                         }
 
-                        // 4. Update Cursor to LATEST processed message timestamp
-                        const latestMsgTimestamp = Math.max(...newFinanceMessages.map(m => m.date));
-                        await AsyncStorage.setItem('last_sms_scan_timestamp', latestMsgTimestamp.toString());
-                        console.log(`💾 Updated Last Scan Timestamp to: ${latestMsgTimestamp}`);
+                        if (!success) {
 
-                        // 5. Refresh Balance
-                        store.dispatch(fetchUserAccounts());
-
-                        if (result.created > 0 && isBackground) {
-                            await sendLocalNotification(
-                                'New Transactions Synced',
-                                `Added ${result.created} new transactions from SMS.`
-                            );
+                            break;
                         }
-
-                        resolve(result); // Return the actual result object
-                    } else {
-                        resolve(null);
                     }
+
+
+
+                    // 4. Update Cursor to LATEST processed message timestamp
+                    const latestMsgTimestamp = Math.max(...newFinanceMessages.map(m => m.date));
+                    await AsyncStorage.setItem('last_sms_scan_timestamp', latestMsgTimestamp.toString());
+
+
+                    // 5. Refresh Balance (Safely)
+                    try {
+
+                        store.dispatch(fetchUserAccounts()); // Don't await strictly or unwrap, let it run
+                    } catch (e) {
+
+                    }
+
+                    if (aggregateResult.created > 0 && isBackground) {
+                        await sendLocalNotification(
+                            'New Transactions Synced',
+                            `Added ${aggregateResult.created} new transactions from SMS.`
+                        );
+                    }
+
+                    // Return whatever we managed to sync
+                    resolve({
+                        ...aggregateResult,
+                        recentMessages,
+                        lastCheckTime: currentCheckTime,
+                        lastBankingMessages,
+                        hasRecentBankingMessages: recentBankingMessages.length > 0,
+                        scanFromDate: scanThreshold
+                    });
+
                 } catch (err) {
-                    console.log('❌ Batch SMS Failed:', err);
-                    if (!isBackground) ToastAndroid.show("Sync Failed.", ToastAndroid.SHORT);
-                    resolve(null);
+                    // This catches unexpected errors in the logic above
+
+                    resolve({ error: "Batch Logic Failed: " + (err.message || err.toString()) });
                 }
             }
         );

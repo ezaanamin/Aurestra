@@ -84,123 +84,191 @@ class BackupManager:
     def perform_backup(self):
         """
         Main entry point to perform the backup.
-        1. Dump DB to temp SQL file.
-        2. Encrypt temp file.
-        3. Copy to destinations.
-        4. Cleanup.
+        Generates a STRUCTURED ZIP containing migrations and seeders.
+        1. create temp structure.
+        2. dump individual tables (Split Schema & Data).
+        3. Zip folder.
+        4. Encrypt Zip.
+        5. Upload.
+        6. Cleanup.
         """
-        print("⏳ [Backup] Starting Daily Backup Process...")
+        print("⏳ [Backup] Starting Structured Daily Backup Process...")
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_backups')
-        os.makedirs(temp_dir, exist_ok=True)
+        base_temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_backups')
         
-        raw_dump_path = os.path.join(temp_dir, f"{self.backup_filename_prefix}_{timestamp}.sql")
-        encrypted_dump_path = raw_dump_path + ".enc"
+        # Structure: temp_backups/backup_2023.../
+        backup_folder_name = f"{self.backup_filename_prefix}_{timestamp}"
+        backup_dir = os.path.join(base_temp_dir, backup_folder_name)
         
-        # 1. Dump Database
-        success = self._dump_database(raw_dump_path)
+        migrations_dir = os.path.join(backup_dir, 'migrations')
+        seeders_dir = os.path.join(backup_dir, 'seeders')
+        
+        os.makedirs(migrations_dir, exist_ok=True)
+        os.makedirs(seeders_dir, exist_ok=True)
+        
+        # Paths for final artifacts
+        zip_path = os.path.join(base_temp_dir, f"{backup_folder_name}.zip")
+        encrypted_path = zip_path + ".enc"
+        
+        # 1. Structure & Dump
+        success = self._create_structured_dump(migrations_dir, seeders_dir)
         if not success:
-            print("❌ [Backup] Database dump failed. Aborting.")
+            print("❌ [Backup] Structured dump failed. Aborting.")
+            # Verify cleanup
+            shutil.rmtree(backup_dir, ignore_errors=True)
             return False
 
-        # 2. Encrypt
+        # 2. Zip the directory
         try:
-            self.encrypt_file(raw_dump_path, encrypted_dump_path)
-            print(f"🔒 [Backup] Encrypted to {encrypted_dump_path}")
+            shutil.make_archive(os.path.join(base_temp_dir, backup_folder_name), 'zip', base_temp_dir, backup_folder_name)
+            # make_archive appends .zip automatically, so zip_path is correct
+            print(f"📦 [Backup] Zipped to {zip_path}")
+        except Exception as e:
+            print(f"❌ [Backup] Zipping failed: {e}")
+            return False
+            
+        # 3. Encrypt
+        try:
+            self.encrypt_file(zip_path, encrypted_path)
+            print(f"🔒 [Backup] Encrypted to {encrypted_path}")
         except Exception as e:
             print(f"❌ [Backup] Encryption failed: {e}")
             return False
 
-        # 3. Distribute (Save to locations)
+        # 4. Distribute
         destinations = []
         if self.external_drive_path:
             destinations.append(self.external_drive_path)
         if self.gdrive_local_path:
             destinations.append(self.gdrive_local_path)
             
-        # If no paths configured, save to local 'backups' folder as fallback
+        # --- Cloud Google Drive Upload ---
+        try:
+            from model import User
+            from drive_utils import get_drive_service, ensure_folder_path, upload_file_from_path
+            
+            admin_user = User.query.filter(User.google_refresh_token.isnot(None)).first()
+            
+            if admin_user:
+                print(f"☁️ [Backup] Found Drive-linked user: {admin_user.email}")
+                service = get_drive_service(admin_user)
+                if service:
+                    folder_id = ensure_folder_path(service, ["Aurestra Backups"])
+                    if folder_id:
+                        filename = os.path.basename(encrypted_path)
+                        # We upload the encrypted ZIP
+                        if upload_file_from_path(service, folder_id, filename, encrypted_path):
+                            print(f"✅ [Backup] Successfully uploaded to Google Drive Cloud!")
+                        else:
+                            print("❌ [Backup] Cloud upload failed.")
+                    else:
+                        print("❌ [Backup] Could not create Drive folder.")
+                else:
+                    print("⚠️ [Backup] Drive service failed to init.")
+            else:
+                print("⚠️ [Backup] No user with Google Drive access found. Skipping Cloud Backup.")
+                
+        except Exception as e:
+            print(f"❌ [Backup] Drive integration error: {e}")
+
+        # Local Fallback
         if not destinations:
             local_backup = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backups')
             destinations.append(local_backup)
-            print(f"⚠️ [Backup] No external paths set. Saving to local: {local_backup}")
+            print(f"⚠️ [Backup] Saving to local fallback: {local_backup}")
 
         for dest in destinations:
             try:
                 os.makedirs(dest, exist_ok=True)
-                final_path = os.path.join(dest, os.path.basename(encrypted_dump_path))
-                shutil.copy2(encrypted_dump_path, final_path)
+                final_path = os.path.join(dest, os.path.basename(encrypted_path))
+                shutil.copy2(encrypted_path, final_path)
                 print(f"✅ [Backup] Saved to: {final_path}")
             except Exception as e:
                 print(f"❌ [Backup] Failed to save to {dest}: {e}")
 
-        # 4. Cleanup
+        # 5. Cleanup
         try:
-            os.remove(raw_dump_path)
-            os.remove(encrypted_dump_path)
+            shutil.rmtree(backup_dir) # Remove unzipped folder
+            os.remove(zip_path)       # Remove zip
+            os.remove(encrypted_path) # Remove encrypted file
             print("🧹 [Backup] Cleanup complete.")
         except Exception as e:
             print(f"⚠️ [Backup] Cleanup warning: {e}")
             
         return True
 
-    def _dump_database(self, output_path):
-        """Determine DB type and run appropriate dump command."""
+    def _create_structured_dump(self, migrations_dir, seeders_dir):
+        """
+        Dumps tables individually into schema and data files.
+        """
+        from sqlalchemy import inspect
+        from database import db # Ensure we have access to db session/engine
+        
         uri = self.db_uri
         
-        try:
-            if uri.startswith('sqlite'):
-                # For SQLite, we just copy the file
-                db_path = uri.replace('sqlite:///', '')
-                if not os.path.isabs(db_path):
-                    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
-                shutil.copy2(db_path, output_path)
-                print("💾 [Backup] SQLite database copied successfully.")
-                return True
-                
-            elif uri.startswith('postgres'):
-                # Parse credentials from URI
-                # postgresql://user:pass@host:port/db
-                from sqlalchemy.engine.url import make_url
-                u = make_url(uri)
-                
-                env = os.environ.copy()
-                env['PGPASSWORD'] = u.password
-                
-                cmd = [
-                    'pg_dump',
-                    '-h', u.host,
-                    '-p', str(u.port),
-                    '-U', u.username,
-                    '-F', 'p', # Plain text SQL
-                    '-f', output_path,
-                    u.database
-                ]
-                subprocess.check_call(cmd, env=env)
-                print("💾 [Backup] PostgreSQL dumped successfully.")
-                return True
-                
-            elif uri.startswith('mysql'):
-                from sqlalchemy.engine.url import make_url
-                u = make_url(uri)
-                
-                # mysqldump -u user -p password -h host db > file
-                cmd = [
-                    'mysqldump',
-                    f'-h{u.host}',
-                    f'-P{u.port}',
-                    f'-u{u.username}',
-                    f'-p{u.password}',
-                    u.database
-                ]
-                
-                with open(output_path, 'w') as f:
-                    subprocess.check_call(cmd, stdout=f)
-                print("💾 [Backup] MySQL dumped successfully.")
-                return True
-                
-        except Exception as e:
-            print(f"❌ [Backup] Dump execution failed: {e}")
-            return False
+        if uri.startswith('sqlite'):
+            # SQLite fallback: Just copy the file to migrations as 'full_db.sqlite'
+            # Structured dump for SQLite is harder without external tools
+            db_path = uri.replace('sqlite:///', '')
+            if not os.path.isabs(db_path):
+                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
+            shutil.copy2(db_path, os.path.join(migrations_dir, 'full_database.sqlite'))
+            print("💾 [Backup] SQLite database copied (Structured dump not supported for SQLite).")
+            return True
             
-        print("❌ [Backup] Unsupported database type.")
+        elif uri.startswith('mysql'):
+            try:
+                from sqlalchemy.engine.url import make_url
+                u = make_url(uri)
+                
+                # Get table names
+                inspector = inspect(db.engine)
+                tables = inspector.get_table_names()
+                
+                print(f"📊 [Backup] Found {len(tables)} tables to dump.")
+                
+                for table in tables:
+                    # 1. Dump Schema (Migration)
+                    mig_file = os.path.join(migrations_dir, f"{table}.sql")
+                    cmd_mig = [
+                        'mysqldump',
+                        f'-h{u.host}',
+                        f'-P{u.port}',
+                        f'-u{u.username}',
+                        f'-p{u.password}',
+                        '--no-data', # Schema only
+                        '--skip-comments',
+                        u.database,
+                        table
+                    ]
+                    with open(mig_file, 'w') as f:
+                        subprocess.check_call(cmd_mig, stdout=f)
+                        
+                    # 2. Dump Data (Seeder)
+                    # Use --skip-extended-insert to have one INSERT per line (Readable)
+                    # Use --complete-insert to include column names
+                    seed_file = os.path.join(seeders_dir, f"{table}.sql")
+                    cmd_seed = [
+                        'mysqldump',
+                        f'-h{u.host}',
+                        f'-P{u.port}',
+                        f'-u{u.username}',
+                        f'-p{u.password}',
+                        '--no-create-info', # Data only
+                        '--skip-extended-insert', # Readable (One row per line)
+                        '--complete-insert',
+                        '--skip-comments',
+                        u.database,
+                        table
+                    ]
+                    with open(seed_file, 'w') as f:
+                        subprocess.check_call(cmd_seed, stdout=f)
+                        
+                print("💾 [Backup] MySQL Structured Dump success.")
+                return True
+                
+            except Exception as e:
+                print(f"❌ [Backup] MySQL Dump failed: {e}")
+                return False
+        
         return False

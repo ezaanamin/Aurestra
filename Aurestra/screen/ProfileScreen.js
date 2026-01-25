@@ -12,21 +12,82 @@ import {
   Switch,
   Modal,
   FlatList,
-  Animated
+  Animated,
+  Alert,
+  ToastAndroid,
+  ActivityIndicator,
+  TextInput,
+  PermissionsAndroid,
+  Linking,
+  Platform
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
 
-import { fetchUserProfile, registerDeviceToken, logout } from '../API/slice/API';
-import { API_BASE_URL } from '../API_URL';
+import { fetchUserProfile, registerDeviceToken, logout, triggerManualBackup } from '../API/slice/API';
+import { API_BASE_URL, setApiUrl } from '../API_URL';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
 const LANGUAGES = ['English', 'Urdu', 'Arabic', 'French', 'Spanish'];
 const CURRENCIES = ['PKR', 'USD', 'EUR', 'GBP', 'AED'];
+
+const SelectionModal = ({ visible, onClose, title, data, onSelect, current }) => {
+  const { isDarkMode, colors } = useSettings();
+
+  return (
+    <Modal animationType="slide" transparent={true} visible={visible} onRequestClose={onClose}>
+      <TouchableOpacity activeOpacity={1} onPress={onClose} style={styles.modalOverlay}>
+        <View style={[styles.modalContent, { backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF' }]}>
+          <View style={styles.modalHandle} />
+          <View style={styles.modalHeader}>
+            <View>
+              <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                {title}
+              </Text>
+              <Text style={[styles.modalSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                Choose your preferred option
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={[styles.modalCloseButton, {
+              backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+            }]}>
+              <Icon name="close" size={20} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={data}
+            keyExtractor={(item) => item}
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                style={[
+                  styles.modalItem,
+                  { borderBottomColor: isDarkMode ? '#27272A' : '#E4E4E7' },
+                  index === data.length - 1 && styles.modalItemLast,
+                  current === item && { backgroundColor: isDarkMode ? '#8B5CF620' : '#8B5CF610' }
+                ]}
+                onPress={() => { onSelect(item); onClose(); }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.modalItemText, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  {item}
+                </Text>
+                {current === item && (
+                  <View style={styles.selectedBadge}>
+                    <Icon name="check-circle" size={20} color="#8B5CF6" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
 
 const ProfileScreen = ({ navigation }) => {
   const dispatch = useDispatch();
@@ -45,17 +106,29 @@ const ProfileScreen = ({ navigation }) => {
     colors
   } = useSettings();
 
+  const [animatedValue] = useState(new Animated.Value(0));
   const [langModalVisible, setLangModalVisible] = useState(false);
   const [currModalVisible, setCurrModalVisible] = useState(false);
+  const [backupModalVisible, setBackupModalVisible] = useState(false);
+  const [backupStatus, setBackupStatus] = useState('idle'); // idle, loading, success, error
+  const [backupMessage, setBackupMessage] = useState('');
   const [timeRemaining, setTimeRemaining] = useState('');
+
+  const [apiModalVisible, setApiModalVisible] = useState(false);
+  const [apiUrlInput, setApiUrlInput] = useState(API_BASE_URL);
 
   const lastCheck = useSelector(state => state.API.lastSmsCheck);
 
   React.useEffect(() => {
     dispatch(fetchUserProfile());
+    Animated.spring(animatedValue, {
+      toValue: 1,
+      tension: 50,
+      friction: 7,
+      useNativeDriver: true,
+    }).start();
   }, [dispatch]);
 
-  // Countdown Timer Logic
   React.useEffect(() => {
     if (!lastCheck) return;
 
@@ -96,21 +169,57 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
-  // User Stats
   const userStats = [
-    { label: t('transactions'), value: user?.stats?.transactions || '0', icon: 'swap-horizontal', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
-    { label: 'Categories', value: user?.stats?.categories || '0', icon: 'shape', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
-    { label: 'Goals', value: user?.stats?.goals || '0', icon: 'target', color: '#10B981', gradient: ['#10B981', '#059669'] },
+    { label: t('transactions'), value: user?.stats?.transactions || '0', icon: 'swap-horizontal', color: '#8B5CF6' },
+    { label: 'Categories', value: user?.stats?.categories || '0', icon: 'shape', color: '#10B981' },
+    { label: 'Goals', value: user?.stats?.goals || '0', icon: 'target', color: '#F59E0B' },
   ];
 
-  // Menu Sections with enhanced icons
+  const quickActions = [
+    { icon: 'plus-circle', label: 'Add Transaction', color: '#8B5CF6', screen: 'Transaction', params: { openAddModal: true } },
+    { icon: 'target', label: 'New Goal', color: '#10B981', screen: 'Saving' },
+    { icon: 'chart-bar', label: 'Analytics', color: '#3B82F6', screen: 'Transaction' },
+    { icon: 'brain', label: 'AI Insights', color: '#F59E0B', screen: 'FinancialInsights' },
+  ];
+
+  const handleSaveApiUrl = async () => {
+    if (!apiUrlInput.trim()) {
+      ToastAndroid.show('Invalid URL', ToastAndroid.SHORT);
+      return;
+    }
+    const cleanUrl = apiUrlInput.trim().replace(/\/$/, "");
+    setApiUrl(cleanUrl);
+    await AsyncStorage.setItem('custom_api_url', cleanUrl);
+    setApiModalVisible(false);
+    ToastAndroid.show('API URL Updated', ToastAndroid.SHORT);
+  };
+
+  const handleBackup = async () => {
+    setBackupModalVisible(true);
+    setBackupStatus('loading');
+    setBackupMessage('Encrypting & Uploading...');
+    try {
+      await dispatch(triggerManualBackup()).unwrap();
+      setBackupStatus('success');
+      setBackupMessage('Backup saved to Google Drive (Aurestra Backups)');
+    } catch (e) {
+      setBackupStatus('error');
+      setBackupMessage(e.message || "Could not complete backup");
+    }
+  };
+
   const accountMenuItems = [
-    { icon: 'account-edit', label: t('editProfile'), screen: 'EditProfile', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
-    { icon: 'wallet', label: t('paymentMethods'), screen: 'PaymentMethods', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
-    { icon: 'bank', label: t('linkedAccounts'), screen: 'LinkedAccounts', color: '#10B981', gradient: ['#10B981', '#059669'] },
-    { icon: 'shape', label: 'Categories', screen: 'CategoryManagement', color: '#EC4899', gradient: ['#EC4899', '#DB2777'] },
-    { icon: 'brain', label: 'Financial Memories', screen: 'FinancialInsights', color: '#F59E0B', gradient: ['#F59E0B', '#D97706'] },
-    { icon: 'file-document', label: t('transactionHistory'), screen: 'FullHistory', color: '#06B6D4', gradient: ['#06B6D4', '#0891B2'] },
+    { icon: 'account-edit', label: t('editProfile'), screen: 'EditProfile', color: '#8B5CF6' },
+    { icon: 'wallet', label: t('paymentMethods'), screen: 'PaymentMethods', color: '#10B981' },
+    { icon: 'bank', label: t('linkedAccounts'), screen: 'LinkedAccounts', color: '#3B82F6' },
+    { icon: 'shape', label: 'Categories', screen: 'CategoryManagement', color: '#EC4899' },
+    { icon: 'file-document', label: t('transactionHistory'), screen: 'FullHistory', color: '#F59E0B' },
+    {
+      icon: 'cloud-upload',
+      label: 'Backup Data',
+      color: '#10B981',
+      action: handleBackup
+    },
   ];
 
   const preferencesMenuItems = [
@@ -119,14 +228,41 @@ const ProfileScreen = ({ navigation }) => {
       label: t('notifications'),
       toggle: true,
       value: notificationsEnabled,
-      setter: (val) => {
+      setter: async (val) => {
         toggleNotifications(val);
         if (val) {
+          if (Platform.OS === 'android' && Platform.Version >= 33) {
+            try {
+              const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+              if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                ToastAndroid.show('Permission required', ToastAndroid.SHORT);
+              }
+            } catch (e) { }
+          }
           registerTokenIfAvailable();
         }
       },
       color: '#EF4444',
-      gradient: ['#EF4444', '#DC2626']
+    },
+    {
+      icon: 'bell-alert',
+      label: 'Fix Notifications',
+      subtitle: 'Grant permissions / Open Settings',
+      action: async () => {
+        if (Platform.OS === 'android') {
+          if (Platform.Version >= 33) {
+            const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+            if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+              ToastAndroid.show('Notifications Enabled', ToastAndroid.SHORT);
+              return;
+            }
+          }
+          // If we are here, either < 33 or denied. Open settings.
+          ToastAndroid.show('Opening Settings...', ToastAndroid.SHORT);
+          Linking.openSettings();
+        }
+      },
+      color: '#F59E0B',
     },
     {
       icon: 'theme-light-dark',
@@ -135,15 +271,13 @@ const ProfileScreen = ({ navigation }) => {
       value: isDarkMode,
       setter: (val) => updateTheme(val ? 'dark' : 'light'),
       color: '#64748B',
-      gradient: ['#64748B', '#475569']
     },
     {
       icon: 'translate',
       label: t('language'),
       subtitle: language,
       action: () => setLangModalVisible(true),
-      color: '#3B82F6',
-      gradient: ['#3B82F6', '#2563EB']
+      color: '#8B5CF6',
     },
     {
       icon: 'currency-usd',
@@ -151,15 +285,24 @@ const ProfileScreen = ({ navigation }) => {
       subtitle: currency,
       action: () => setCurrModalVisible(true),
       color: '#10B981',
-      gradient: ['#10B981', '#059669']
+    },
+    {
+      icon: 'server-network',
+      label: 'API Configuration',
+      subtitle: 'Manage Server URL',
+      action: () => {
+        setApiUrlInput(API_BASE_URL);
+        setApiModalVisible(true);
+      },
+      color: '#6366F1',
     },
   ];
 
   const supportMenuItems = [
-    { icon: 'help-circle', label: t('helpCenter'), color: '#3B82F6', gradient: ['#3B82F6', '#2563EB'] },
-    { icon: 'information', label: t('about'), color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED'] },
-    { icon: 'shield-check', label: t('privacyPolicy'), color: '#10B981', gradient: ['#10B981', '#059669'] },
-    { icon: 'file-document-outline', label: t('termsOfService'), color: '#F59E0B', gradient: ['#F59E0B', '#D97706'] },
+    { icon: 'help-circle', label: t('helpCenter'), color: '#3B82F6' },
+    { icon: 'information', label: t('about'), color: '#8B5CF6' },
+    { icon: 'shield-check', label: t('privacyPolicy'), color: '#10B981' },
+    { icon: 'file-document-outline', label: t('termsOfService'), color: '#F59E0B' },
   ];
 
   const isScreenActive = (screenName) => {
@@ -169,31 +312,28 @@ const ProfileScreen = ({ navigation }) => {
   const renderMenuItem = (item, index, isLastItem) => {
     if (item.toggle) {
       return (
-        <View 
-          key={index} 
+        <View
+          key={index}
           style={[
-            styles.menuItem, 
-            isLastItem && styles.menuItemLast, 
-            { borderBottomColor: colors.border }
+            styles.menuItem,
+            isLastItem && styles.menuItemLast,
+            { backgroundColor: isDarkMode ? '#27272A' : '#FFFFFF' }
           ]}
         >
-          <View style={styles.menuIconContainer}>
-            <LinearGradient
-              colors={item.gradient}
-              style={styles.menuIconWrapper}
-            >
-              <Icon name={item.icon} size={22} color="#FFFFFF" />
-            </LinearGradient>
+          <View style={[styles.menuIcon, { backgroundColor: item.color + '15' }]}>
+            <Icon name={item.icon} size={20} color={item.color} />
           </View>
           <View style={styles.menuTextContainer}>
-            <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+            <Text style={[styles.menuLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+              {item.label}
+            </Text>
           </View>
           <Switch
             value={item.value}
             onValueChange={item.setter}
-            trackColor={{ false: isDarkMode ? '#334155' : '#E2E8F0', true: item.color + '40' }}
+            trackColor={{ false: isDarkMode ? '#3F3F46' : '#E4E4E7', true: item.color + '40' }}
             thumbColor={item.value ? item.color : '#FFFFFF'}
-            ios_backgroundColor={isDarkMode ? '#334155' : '#E2E8F0'}
+            ios_backgroundColor={isDarkMode ? '#3F3F46' : '#E4E4E7'}
           />
         </View>
       );
@@ -203,116 +343,77 @@ const ProfileScreen = ({ navigation }) => {
       <TouchableOpacity
         key={index}
         style={[
-          styles.menuItem, 
-          isLastItem && styles.menuItemLast, 
-          { borderBottomColor: colors.border }
+          styles.menuItem,
+          isLastItem && styles.menuItemLast,
+          { backgroundColor: isDarkMode ? '#27272A' : '#FFFFFF' }
         ]}
         onPress={() => item.action ? item.action() : (item.screen && navigation.navigate(item.screen))}
         activeOpacity={0.7}
       >
-        <View style={styles.menuIconContainer}>
-          <LinearGradient
-            colors={item.gradient}
-            style={styles.menuIconWrapper}
-          >
-            <Icon name={item.icon} size={22} color="#FFFFFF" />
-          </LinearGradient>
+        <View style={[styles.menuIcon, { backgroundColor: item.color + '15' }]}>
+          <Icon name={item.icon} size={20} color={item.color} />
         </View>
         <View style={styles.menuTextContainer}>
-          <Text style={[styles.menuLabel, { color: colors.text }]}>{item.label}</Text>
+          <Text style={[styles.menuLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+            {item.label}
+          </Text>
           {item.subtitle && (
-            <Text style={[styles.menuSubtitle, { color: colors.textSecondary }]}>
+            <Text style={[styles.menuSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
               {item.subtitle}
             </Text>
           )}
         </View>
-        <Icon name="chevron-right" size={22} color={colors.textSecondary} />
+        <Icon name="chevron-right" size={20} color={isDarkMode ? '#52525B' : '#A1A1AA'} />
       </TouchableOpacity>
     );
   };
 
-  const SelectionModal = ({ visible, onClose, title, data, onSelect, current }) => (
-    <Modal animationType="slide" transparent={true} visible={visible} onRequestClose={onClose}>
-      <TouchableOpacity activeOpacity={1} onPress={onClose} style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
-          <View style={styles.modalHeader}>
-            <View>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>{title}</Text>
-              <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
-                Choose your preferred option
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} style={styles.modalCloseButton}>
-              <Icon name="close" size={24} color={colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={data}
-            keyExtractor={(item) => item}
-            renderItem={({ item, index }) => (
-              <TouchableOpacity
-                style={[
-                  styles.modalItem, 
-                  { borderBottomColor: colors.border },
-                  index === data.length - 1 && styles.modalItemLast
-                ]}
-                onPress={() => { onSelect(item); onClose(); }}
-                activeOpacity={0.7}
-              >
-                <View style={styles.modalItemContent}>
-                  <Text style={[styles.modalItemText, { color: colors.text }]}>{item}</Text>
-                  {current === item && (
-                    <View style={styles.selectedBadge}>
-                      <Text style={styles.selectedBadgeText}>Current</Text>
-                    </View>
-                  )}
-                </View>
-                {current === item && <Icon name="check-circle" size={24} color="#10B981" />}
-              </TouchableOpacity>
-            )}
-          />
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
+
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar 
-        barStyle="light-content" 
-        backgroundColor={isDarkMode ? '#0F172A' : '#1E293B'} 
+    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#0A0A0B' : '#F8F9FE' }]}>
+      <StatusBar
+        barStyle={isDarkMode ? "light-content" : "dark-content"}
+        backgroundColor="transparent"
+        translucent
       />
 
-      <ScrollView 
+      <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Enhanced Header with Gradient */}
-        <LinearGradient 
-          colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']} 
-          style={styles.header}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        >
-          {/* Header Navigation */}
-          <View style={styles.headerContent}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-              <Icon name="arrow-left" size={24} color="#FFFFFF" />
+        {/* Hero Header */}
+        <View style={styles.heroSection}>
+          <View style={styles.heroTop}>
+            <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backButton, {
+              backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'
+            }]}>
+              <Icon name="arrow-left" size={22} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>{t('profile')}</Text>
-            <TouchableOpacity 
-              style={styles.settingsButton}
-              onPress={() => navigation.navigate('EditProfile')}
-            >
-              <Icon name="cog" size={24} color="#FFFFFF" />
+
+            <TouchableOpacity style={[styles.settingsButton, {
+              backgroundColor: isDarkMode ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)'
+            }]} onPress={() => navigation.navigate('EditProfile')}>
+              <Icon name="cog" size={22} color="#8B5CF6" />
             </TouchableOpacity>
           </View>
 
-          {/* Enhanced Profile Card */}
-          <View style={styles.profileCard}>
+          {/* Profile Card */}
+          <Animated.View style={[
+            styles.profileCard,
+            {
+              transform: [{
+                scale: animatedValue.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.9, 1],
+                })
+              }],
+              opacity: animatedValue,
+            }
+          ]}>
             <View style={styles.profileImageWrapper}>
               <LinearGradient
-                colors={['#3B82F6', '#8B5CF6']}
+                colors={['#8B5CF6', '#7C3AED']}
                 style={styles.profileImageBorder}
               >
                 <Image
@@ -324,167 +425,199 @@ const ProfileScreen = ({ navigation }) => {
                   style={styles.profileImage}
                 />
               </LinearGradient>
-              <TouchableOpacity 
-                style={styles.editImageButton} 
+              <TouchableOpacity
+                style={styles.editButton}
                 onPress={() => navigation.navigate('EditProfile')}
               >
                 <LinearGradient
-                  colors={['#3B82F6', '#2563EB']}
-                  style={styles.editImageGradient}
+                  colors={['#8B5CF6', '#7C3AED']}
+                  style={styles.editButtonGradient}
                 >
-                  <Icon name="camera" size={18} color="#FFFFFF" />
+                  <Icon name="camera" size={16} color="#FFFFFF" />
                 </LinearGradient>
               </TouchableOpacity>
             </View>
-            <Text style={styles.profileName}>{user?.full_name || 'User'}</Text>
-            <Text style={styles.profileEmail}>{user?.email || 'user@example.com'}</Text>
-            <View style={styles.verifiedBadge}>
-              <LinearGradient
-                colors={['rgba(16, 185, 129, 0.2)', 'rgba(16, 185, 129, 0.1)']}
-                style={styles.verifiedBadgeGradient}
-              >
-                <Icon name="check-decagram" size={16} color="#10B981" />
-                <Text style={styles.verifiedText}>{t('verifiedAccount')}</Text>
-              </LinearGradient>
-            </View>
-          </View>
 
-          {/* Enhanced Stats Cards */}
-          <View style={styles.statsContainer}>
+            <Text style={[styles.profileName, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+              {user?.full_name || 'User'}
+            </Text>
+            <Text style={[styles.profileEmail, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+              {user?.email || 'user@example.com'}
+            </Text>
+
+            <View style={styles.verifiedBadge}>
+              <Icon name="check-decagram" size={14} color="#10B981" />
+              <Text style={styles.verifiedText}>Verified Account</Text>
+            </View>
+          </Animated.View>
+
+          {/* Stats Grid */}
+          <View style={styles.statsGrid}>
             {userStats.map((stat, index) => (
-              <TouchableOpacity 
-                key={index} 
-                style={styles.statCard}
-                activeOpacity={0.8}
+              <Animated.View
+                key={index}
+                style={[
+                  styles.statCard,
+                  {
+                    backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                    borderColor: isDarkMode ? '#27272A' : '#E4E4E7',
+                    transform: [{
+                      translateY: animatedValue.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [30, 0],
+                      })
+                    }],
+                    opacity: animatedValue,
+                  }
+                ]}
               >
-                <LinearGradient
-                  colors={[stat.color + '15', stat.color + '08']}
-                  style={styles.statCardGradient}
-                >
-                  <View style={styles.statIconWrapper}>
-                    <LinearGradient
-                      colors={stat.gradient}
-                      style={styles.statIconGradient}
-                    >
-                      <Icon name={stat.icon} size={22} color="#FFFFFF" />
-                    </LinearGradient>
-                  </View>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{stat.value}</Text>
-                  <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{stat.label}</Text>
-                </LinearGradient>
+                <View style={[styles.statIcon, { backgroundColor: stat.color + '15' }]}>
+                  <Icon name={stat.icon} size={22} color={stat.color} />
+                </View>
+                <Text style={[styles.statValue, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  {stat.value}
+                </Text>
+                <Text style={[styles.statLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                  {stat.label}
+                </Text>
+              </Animated.View>
+            ))}
+          </View>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.quickActionsSection}>
+          <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+            Quick Actions
+          </Text>
+          <View style={styles.quickActionsGrid}>
+            {quickActions.map((action, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[styles.quickActionCard, {
+                  backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+                  borderColor: isDarkMode ? '#27272A' : '#E4E4E7'
+                }]}
+                onPress={() => action.screen && navigation.navigate(action.screen, action.params)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.quickActionIcon, { backgroundColor: action.color + '15' }]}>
+                  <Icon name={action.icon} size={20} color={action.color} />
+                </View>
+                <Text style={[styles.quickActionLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  {action.label}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
-        </LinearGradient>
+        </View>
 
         {/* Menu Sections */}
-        <View style={styles.content}>
-          {/* Account Section */}
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <View style={styles.sectionIconWrapper}>
-                <LinearGradient
-                  colors={['#3B82F6', '#2563EB']}
-                  style={styles.sectionIconGradient}
-                >
-                  <Icon name="account-circle" size={18} color="#FFFFFF" />
-                </LinearGradient>
+        <View style={styles.menuSections}>
+          {/* Account */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIcon, { backgroundColor: isDarkMode ? '#8B5CF620' : '#8B5CF610' }]}>
+                  <Icon name="account-circle" size={16} color="#8B5CF6" />
+                </View>
+                <Text style={[styles.sectionLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  Account
+                </Text>
               </View>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('account')}</Text>
+            </View>
+            <View style={styles.menuList}>
+              {accountMenuItems.map((item, index) =>
+                renderMenuItem(item, index, index === accountMenuItems.length - 1)
+              )}
             </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {accountMenuItems.map((item, index) =>
-              renderMenuItem(item, index, index === accountMenuItems.length - 1)
-            )}
-          </View>
 
-          {/* Preferences Section */}
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <View style={styles.sectionIconWrapper}>
-                <LinearGradient
-                  colors={['#8B5CF6', '#7C3AED']}
-                  style={styles.sectionIconGradient}
-                >
-                  <Icon name="tune" size={18} color="#FFFFFF" />
-                </LinearGradient>
+          {/* Preferences */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIcon, { backgroundColor: isDarkMode ? '#10B98120' : '#10B98110' }]}>
+                  <Icon name="tune" size={16} color="#10B981" />
+                </View>
+                <Text style={[styles.sectionLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  Preferences
+                </Text>
               </View>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('preferences')}</Text>
+            </View>
+            <View style={styles.menuList}>
+              {preferencesMenuItems.map((item, index) =>
+                renderMenuItem(item, index, index === preferencesMenuItems.length - 1)
+              )}
             </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {preferencesMenuItems.map((item, index) =>
-              renderMenuItem(item, index, index === preferencesMenuItems.length - 1)
-            )}
-          </View>
 
-          {/* Support Section */}
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionHeaderLeft}>
-              <View style={styles.sectionIconWrapper}>
-                <LinearGradient
-                  colors={['#10B981', '#059669']}
-                  style={styles.sectionIconGradient}
-                >
-                  <Icon name="lifebuoy" size={18} color="#FFFFFF" />
-                </LinearGradient>
+          {/* Support */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIcon, { backgroundColor: isDarkMode ? '#3B82F620' : '#3B82F610' }]}>
+                  <Icon name="lifebuoy" size={16} color="#3B82F6" />
+                </View>
+                <Text style={[styles.sectionLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                  Support
+                </Text>
               </View>
-              <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('support')}</Text>
+            </View>
+            <View style={styles.menuList}>
+              {supportMenuItems.map((item, index) =>
+                renderMenuItem(item, index, index === supportMenuItems.length - 1)
+              )}
             </View>
           </View>
-          <View style={[styles.menuSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {supportMenuItems.map((item, index) =>
-              renderMenuItem(item, index, index === supportMenuItems.length - 1)
-            )}
-          </View>
 
-          {/* Enhanced Logout Button */}
-          <TouchableOpacity 
-            style={styles.logoutButton} 
+          {/* Logout */}
+          <TouchableOpacity
+            style={styles.logoutButton}
             onPress={handleLogout}
             activeOpacity={0.8}
           >
             <LinearGradient
               colors={['#EF4444', '#DC2626']}
               style={styles.logoutGradient}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
             >
-              <Icon name="logout" size={22} color="#FFFFFF" />
-              <Text style={styles.logoutText}>{t('logout')}</Text>
+              <Icon name="logout" size={20} color="#FFFFFF" />
+              <Text style={styles.logoutText}>Logout</Text>
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Enhanced App Info */}
-          <View style={styles.appInfoContainer}>
-            <View style={styles.versionBadge}>
-              <Icon name="information-outline" size={16} color={colors.textSecondary} />
-              <Text style={[styles.versionText, { color: colors.textSecondary }]}>
+          {/* App Info */}
+          <View style={styles.appInfo}>
+            <View style={[styles.versionBadge, {
+              backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+            }]}>
+              <Icon name="information-outline" size={14} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
+              <Text style={[styles.versionText, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
                 Version 1.1.0
               </Text>
             </View>
+
             {lastCheck && (
-              <View style={styles.syncInfoContainer}>
-                <View style={styles.syncInfoRow}>
-                  <Icon name="sync" size={14} color={colors.textSecondary} />
-                  <Text style={[styles.syncInfoText, { color: colors.textSecondary }]}>
-                    Last SMS Sync: {new Date(lastCheck).toLocaleTimeString()}
+              <View style={styles.syncInfo}>
+                <View style={styles.syncRow}>
+                  <Icon name="sync" size={12} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
+                  <Text style={[styles.syncText, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                    Last sync: {new Date(lastCheck).toLocaleTimeString()}
                   </Text>
                 </View>
-                <View style={styles.nextSyncBadge}>
-                  <Icon name="clock-outline" size={14} color="#3B82F6" />
-                  <Text style={styles.nextSyncText}>
-                    Next: {timeRemaining || 'Calculating...'}
-                  </Text>
-                </View>
+                {timeRemaining && (
+                  <View style={styles.nextSyncBadge}>
+                    <Icon name="clock-outline" size={12} color="#8B5CF6" />
+                    <Text style={styles.nextSyncText}>Next: {timeRemaining}</Text>
+                  </View>
+                )}
               </View>
             )}
           </View>
         </View>
       </ScrollView>
 
-      {/* Enhanced Modals */}
+      {/* Modals */}
       <SelectionModal
         visible={langModalVisible}
         onClose={() => setLangModalVisible(false)}
@@ -502,31 +635,173 @@ const ProfileScreen = ({ navigation }) => {
         current={currency}
       />
 
-      {/* Enhanced Bottom Navigation */}
-      <View style={[styles.bottomNav, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+      {/* Backup Status Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={backupModalVisible}
+        onRequestClose={() => {
+          if (backupStatus !== 'loading') setBackupModalVisible(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF' }]}>
+            <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+              {backupStatus === 'loading' ? (
+                <View style={{ marginBottom: 20, alignItems: 'center' }}>
+                  <ActivityIndicator size="large" color="#8B5CF6" />
+                  <Text style={[styles.modalTitle, { marginVertical: 16, color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                    Creating Backup...
+                  </Text>
+                </View>
+              ) : backupStatus === 'success' ? (
+                <View style={{ marginBottom: 20, alignItems: 'center' }}>
+                  <Icon name="cloud-check" size={56} color="#10B981" />
+                  <Text style={[styles.modalTitle, { marginVertical: 16, color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                    Backup Complete
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ marginBottom: 20, alignItems: 'center' }}>
+                  <Icon name="alert-circle" size={56} color="#EF4444" />
+                  <Text style={[styles.modalTitle, { marginVertical: 16, color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                    Backup Failed
+                  </Text>
+                </View>
+              )}
+
+              <Text style={[styles.modalSubtitle, { textAlign: 'center', color: isDarkMode ? '#A1A1AA' : '#71717A', marginBottom: 24, fontSize: 13 }]}>
+                {backupMessage}
+              </Text>
+
+              {backupStatus !== 'loading' && (
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: backupStatus === 'success' ? '#10B981' : '#27272A',
+                    paddingVertical: 12,
+                    paddingHorizontal: 32,
+                    borderRadius: 16,
+                    width: '100%',
+                    alignItems: 'center'
+                  }}
+                  onPress={() => setBackupModalVisible(false)}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Done</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* API Edit Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={apiModalVisible}
+        onRequestClose={() => setApiModalVisible(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setApiModalVisible(false)}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            style={[styles.modalContent, { backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF' }]}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                API Configuration
+              </Text>
+              <TouchableOpacity onPress={() => setApiModalVisible(false)}>
+                <Icon name="close" size={24} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ paddingVertical: 16 }}>
+              <Text style={{
+                color: isDarkMode ? '#A1A1AA' : '#71717A',
+                marginBottom: 8,
+                fontSize: 13
+              }}>
+                Enter new API Base URL (e.g. https://api.example.com)
+              </Text>
+              <TextInput
+                value={apiUrlInput}
+                onChangeText={setApiUrlInput}
+                placeholder="https://..."
+                placeholderTextColor={isDarkMode ? '#52525B' : '#A1A1AA'}
+                style={{
+                  backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5',
+                  color: isDarkMode ? '#FFFFFF' : '#1A1A1D',
+                  padding: 12,
+                  borderRadius: 12,
+                  fontSize: 15,
+                  borderWidth: 1,
+                  borderColor: isDarkMode ? '#3F3F46' : '#E4E4E7'
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5',
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  alignItems: 'center'
+                }}
+                onPress={() => setApiUrlInput(API_BASE_URL)} // Reset to current
+              >
+                <Text style={{ color: isDarkMode ? '#FFFFFF' : '#1A1A1D', fontWeight: '600' }}>Reset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#8B5CF6',
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  alignItems: 'center'
+                }}
+                onPress={handleSaveApiUrl}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: 'Bold' }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Bottom Navigation */}
+      <View style={[styles.bottomNav, {
+        backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
+        borderTopColor: isDarkMode ? '#27272A' : '#E4E4E7'
+      }]}>
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate('Home')}
           activeOpacity={0.7}
         >
-          {isScreenActive('Home') && (
-            <LinearGradient
-              colors={['#3B82F6', '#2563EB']}
-              style={styles.navIconActive}
-            />
-          )}
-          <View style={[styles.navIconWrapper, isScreenActive('Home') && { zIndex: 1 }]}>
+          <View style={[
+            styles.navIconWrapper,
+            isScreenActive('Home') && styles.navIconActive
+          ]}>
             <Icon
               name="home"
               size={24}
-              color={isScreenActive('Home') ? '#FFFFFF' : colors.textSecondary}
+              color={isScreenActive('Home') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
             />
           </View>
           <Text style={[
-            styles.navLabel, 
-            { color: isScreenActive('Home') ? '#3B82F6' : colors.textSecondary }
+            styles.navLabel,
+            { color: isScreenActive('Home') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
           ]}>
-            {t('home')}
+            Home
           </Text>
         </TouchableOpacity>
 
@@ -535,24 +810,21 @@ const ProfileScreen = ({ navigation }) => {
           onPress={() => navigation.navigate('Budget')}
           activeOpacity={0.7}
         >
-          {isScreenActive('Budget') && (
-            <LinearGradient
-              colors={['#3B82F6', '#2563EB']}
-              style={styles.navIconActive}
-            />
-          )}
-          <View style={[styles.navIconWrapper, isScreenActive('Budget') && { zIndex: 1 }]}>
+          <View style={[
+            styles.navIconWrapper,
+            isScreenActive('Budget') && styles.navIconActive
+          ]}>
             <Icon
               name="chart-bar"
               size={24}
-              color={isScreenActive('Budget') ? '#FFFFFF' : colors.textSecondary}
+              color={isScreenActive('Budget') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
             />
           </View>
           <Text style={[
-            styles.navLabel, 
-            { color: isScreenActive('Budget') ? '#3B82F6' : colors.textSecondary }
+            styles.navLabel,
+            { color: isScreenActive('Budget') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
           ]}>
-            {t('budget')}
+            Budget
           </Text>
         </TouchableOpacity>
 
@@ -561,24 +833,21 @@ const ProfileScreen = ({ navigation }) => {
           onPress={() => navigation.navigate('Transaction')}
           activeOpacity={0.7}
         >
-          {isScreenActive('Transaction') && (
-            <LinearGradient
-              colors={['#3B82F6', '#2563EB']}
-              style={styles.navIconActive}
-            />
-          )}
-          <View style={[styles.navIconWrapper, isScreenActive('Transaction') && { zIndex: 1 }]}>
+          <View style={[
+            styles.navIconWrapper,
+            isScreenActive('Transaction') && styles.navIconActive
+          ]}>
             <Icon
               name="swap-horizontal"
               size={24}
-              color={isScreenActive('Transaction') ? '#FFFFFF' : colors.textSecondary}
+              color={isScreenActive('Transaction') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
             />
           </View>
           <Text style={[
-            styles.navLabel, 
-            { color: isScreenActive('Transaction') ? '#3B82F6' : colors.textSecondary }
+            styles.navLabel,
+            { color: isScreenActive('Transaction') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
           ]}>
-            {t('transactions')}
+            Activity
           </Text>
         </TouchableOpacity>
 
@@ -587,24 +856,21 @@ const ProfileScreen = ({ navigation }) => {
           onPress={() => navigation.navigate('Saving')}
           activeOpacity={0.7}
         >
-          {isScreenActive('Saving') && (
-            <LinearGradient
-              colors={['#3B82F6', '#2563EB']}
-              style={styles.navIconActive}
-            />
-          )}
-          <View style={[styles.navIconWrapper, isScreenActive('Saving') && { zIndex: 1 }]}>
+          <View style={[
+            styles.navIconWrapper,
+            isScreenActive('Saving') && styles.navIconActive
+          ]}>
             <Icon
               name="piggy-bank"
               size={24}
-              color={isScreenActive('Saving') ? '#FFFFFF' : colors.textSecondary}
+              color={isScreenActive('Saving') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
             />
           </View>
           <Text style={[
-            styles.navLabel, 
-            { color: isScreenActive('Saving') ? '#3B82F6' : colors.textSecondary }
+            styles.navLabel,
+            { color: isScreenActive('Saving') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
           ]}>
-            {t('savings')}
+            Goals
           </Text>
         </TouchableOpacity>
 
@@ -613,24 +879,22 @@ const ProfileScreen = ({ navigation }) => {
           onPress={() => navigation.navigate('Profile')}
           activeOpacity={0.7}
         >
-          {isScreenActive('Profile') && (
-            <LinearGradient
-              colors={['#3B82F6', '#2563EB']}
-              style={styles.navIconActive}
-            />
-          )}
-          <View style={[styles.navIconWrapper, isScreenActive('Profile') && { zIndex: 1 }]}>
+          <View style={[
+            styles.navIconWrapper,
+            isScreenActive('Profile') && styles.navIconActive,
+            isScreenActive('Profile') && { backgroundColor: '#8B5CF615' }
+          ]}>
             <Icon
               name="account-circle"
               size={24}
-              color={isScreenActive('Profile') ? '#FFFFFF' : colors.textSecondary}
+              color={isScreenActive('Profile') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
             />
           </View>
           <Text style={[
-            styles.navLabel, 
-            { color: isScreenActive('Profile') ? '#3B82F6' : colors.textSecondary }
+            styles.navLabel,
+            { color: isScreenActive('Profile') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
           ]}>
-            {t('profile')}
+            Profile
           </Text>
         </TouchableOpacity>
       </View>
@@ -645,162 +909,168 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 100,
   },
-  header: {
+  heroSection: {
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 44 : StatusBar.currentHeight + 16,
     paddingBottom: 24,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
-  headerContent: {
+  heroTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    marginBottom: 24,
+    marginBottom: 32,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-  },
   settingsButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },
   profileCard: {
     alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 24,
+    marginBottom: 32,
   },
   profileImageWrapper: {
     position: 'relative',
     marginBottom: 16,
   },
   profileImageBorder: {
-    padding: 4,
-    borderRadius: 62,
+    padding: 3,
+    borderRadius: 60,
   },
   profileImage: {
     width: 110,
     height: 110,
     borderRadius: 55,
-    borderWidth: 4,
-    borderColor: '#1E293B',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
   },
-  editImageButton: {
+  editButton: {
     position: 'absolute',
     bottom: 0,
     right: 0,
-    borderRadius: 20,
+    borderRadius: 18,
     overflow: 'hidden',
   },
-  editImageGradient: {
-    width: 40,
-    height: 40,
+  editButtonGradient: {
+    width: 36,
+    height: 36,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#1E293B',
-    borderRadius: 20,
+    borderColor: '#FFFFFF',
+    borderRadius: 18,
   },
   profileName: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 4,
+    fontSize: 28,
+    fontWeight: '800',
     letterSpacing: -0.5,
+    marginBottom: 4,
   },
   profileEmail: {
     fontSize: 14,
-    color: '#94A3B8',
-    marginBottom: 12,
     fontWeight: '500',
+    marginBottom: 12,
   },
   verifiedBadge: {
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  verifiedBadgeGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.3)',
+    backgroundColor: 'rgba(16,185,129,0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
   },
   verifiedText: {
-    fontSize: 12,
-    color: '#6EE7B7',
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#10B981',
     letterSpacing: 0.3,
   },
-  statsContainer: {
+  statsGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
     gap: 12,
   },
   statCard: {
     flex: 1,
     borderRadius: 20,
-    overflow: 'hidden',
-  },
-  statCardGradient: {
     padding: 16,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 20,
   },
-  statIconWrapper: {
-    marginBottom: 10,
-    borderRadius: 22,
-    overflow: 'hidden',
-  },
-  statIconGradient: {
+  statIcon: {
     width: 44,
     height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
+    marginBottom: 10,
   },
   statValue: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 2,
+    fontSize: 24,
+    fontWeight: '800',
     letterSpacing: -0.5,
+    Bottom: 4,
   },
   statLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  quickActionsSection: {
+    paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+    marginBottom: 16,
+  },
+  quickActionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  quickActionCard: {
+    width: (width - 52) / 2,
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+  },
+  quickActionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  quickActionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.1,
     textAlign: 'center',
   },
-  content: {
-    padding: 20,
+  menuSections: {
+    paddingHorizontal: 20,
+  },
+  section: {
+    marginBottom: 24,
   },
   sectionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 8,
+    justifyContent: 'space-between',
     marginBottom: 12,
   },
   sectionHeaderLeft: {
@@ -808,50 +1078,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  sectionIconWrapper: {
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  sectionIconGradient: {
-    width: 32,
-    height: 32,
+  sectionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sectionTitle: {
+  sectionLabel: {
     fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: -0.3,
+    fontWeight: '700',
+    letterSpacing: -0.2,
   },
-  menuSection: {
-    borderRadius: 20,
-    marginBottom: 16,
-    borderWidth: 1,
+  menuList: {
+    borderRadius: 16,
     overflow: 'hidden',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
     borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.05)',
   },
   menuItemLast: {
     borderBottomWidth: 0,
   },
-  menuIconContainer: {
-    marginRight: 14,
-  },
-  menuIconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  menuIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
   },
   menuTextContainer: {
     flex: 1,
@@ -859,39 +1119,34 @@ const styles = StyleSheet.create({
   menuLabel: {
     fontSize: 15,
     fontWeight: '600',
-    letterSpacing: -0.2,
+    letterSpacing: -0.1,
   },
   menuSubtitle: {
     fontSize: 13,
-    marginTop: 2,
     fontWeight: '500',
+    marginTop: 2,
   },
   logoutButton: {
     marginTop: 8,
-    borderRadius: 20,
+    marginBottom: 24,
+    borderRadius: 16,
     overflow: 'hidden',
-    elevation: 4,
-    shadowColor: '#EF4444',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
   logoutGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 18,
+    paddingVertical: 16,
     gap: 10,
   },
   logoutText: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: '#FFFFFF',
-    letterSpacing: 0.3,
+    letterSpacing: -0.2,
   },
-  appInfoContainer: {
+  appInfo: {
     alignItems: 'center',
-    marginTop: 32,
     gap: 12,
   },
   versionBadge: {
@@ -900,39 +1155,101 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: 'rgba(148, 163, 184, 0.1)',
     borderRadius: 12,
   },
   versionText: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '600',
   },
-  syncInfoContainer: {
+  syncInfo: {
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
-  syncInfoRow: {
+  syncRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  syncInfoText: {
+  syncText: {
     fontSize: 11,
     fontWeight: '500',
   },
   nextSyncBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    paddingHorizontal: 10,
+    gap: 4,
+    backgroundColor: 'rgba(139,92,246,0.1)',
+    paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 10,
+    borderRadius: 8,
   },
   nextSyncText: {
-    fontSize: 11,
-    color: '#3B82F6',
-    fontWeight: 'bold',
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#8B5CF6',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 34,
+    maxHeight: '70%',
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#D1D5DB',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  modalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+  },
+  modalItemLast: {
+    borderBottomWidth: 0,
+  },
+  modalItemText: {
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  selectedBadge: {
+    marginLeft: 'auto',
   },
   bottomNav: {
     position: 'absolute',
@@ -940,102 +1257,31 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    justifyContent: 'space-around',
     paddingVertical: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
     borderTopWidth: 1,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
   },
   navItem: {
     alignItems: 'center',
-    gap: 4,
-    position: 'relative',
+    justifyContent: 'center',
+    flex: 1,
   },
   navIconWrapper: {
-    padding: 8,
-    borderRadius: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
   },
   navIconActive: {
-    position: 'absolute',
-    top: 0,
-    left: '50%',
-    marginLeft: -24,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    backgroundColor: 'rgba(139,92,246,0.1)',
   },
   navLabel: {
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: -0.2,
-  },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-  },
-  modalContent: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 24,
-    maxHeight: '70%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 24,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 4,
-    letterSpacing: -0.5,
-  },
-  modalSubtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  modalCloseButton: {
-    padding: 4,
-  },
-  modalItem: {
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  modalItemLast: {
-    borderBottomWidth: 0,
-  },
-  modalItemContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  modalItemText: {
-    fontSize: 16,
-    fontWeight: '500',
-    letterSpacing: -0.2,
-  },
-  selectedBadge: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  selectedBadgeText: {
-    fontSize: 10,
-    color: '#10B981',
-    fontWeight: 'bold',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
 });
 

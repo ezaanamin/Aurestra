@@ -14,7 +14,7 @@ import notifee, { AndroidImportance } from '@notifee/react-native';
 
 import SmsListener from 'react-native-android-sms-listener';
 import SmsAndroid from 'react-native-get-sms-android';
-import { API_BASE_URL } from './API_URL';
+import { API_BASE_URL, loadApiUrl } from './API_URL';
 import { registerDeviceToken as registerDeviceTokenThunk, processSMS, processSMSBatch, setLastSmsCheck, fetchUserAccounts } from './API/slice/API';
 import { readAllSMS, requestSMSPermission, sendLocalNotification } from './utils/smsHelper';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
@@ -218,6 +218,9 @@ const configureBackgroundFetch = () => {
 // --------------------------------------------------
 const initApp = async () => {
   try {
+    // Load Custom API URL from Storage
+    await loadApiUrl();
+
     const authStatus = await messaging().requestPermission();
     console.log('[FCM] Permission:', authStatus);
 

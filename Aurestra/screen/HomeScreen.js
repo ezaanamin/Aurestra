@@ -14,6 +14,7 @@ import {
   TextInput,
   ToastAndroid
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -31,7 +32,8 @@ import {
   calculatePreviousStatement,
   setManualBalance,
   fetchUncategorizedTransactions,
-  markStatementRead
+  markStatementRead,
+  fetchFinancialInsight
 } from '../API/slice/API';
 import { readAllSMS, sendLocalNotification } from '../utils/smsHelper';
 import { useDispatch, useSelector } from 'react-redux';
@@ -67,14 +69,46 @@ const HomeScreen = ({ navigation }) => {
   const openMonthPicker = () => setShowMonthPicker(true);
   const closeMonthPicker = () => setShowMonthPicker(false);
   const handleConfirm = (date) => {
-    const monthStr = date.toISOString().slice(0, 7);
-    setSelectedMonth(monthStr);
-    closeMonthPicker();
+    try {
+      // DEBUG: Step 1
+      ToastAndroid.show("Step 1: Month selected: " + date.toISOString(), ToastAndroid.SHORT);
 
-    setShowStatementModal(true);
-    dispatch(calculatePreviousStatement(monthStr)).then(() => {
-      dispatch(fetchUserAccounts());
-    });
+      const monthStr = date.toISOString().slice(0, 7);
+      setSelectedMonth(monthStr);
+      closeMonthPicker();
+
+      // DEBUG: Step 2
+      ToastAndroid.show("Step 2: Picker closed. Waiting...", ToastAndroid.SHORT);
+
+      // Small delay to allow MonthPicker to close completely
+      setTimeout(() => {
+        try {
+          // DEBUG: Step 3
+          ToastAndroid.show("Step 3: Opening Modal...", ToastAndroid.SHORT);
+
+          setShowStatementModal(true);
+
+          // DEBUG: Step 4
+          ToastAndroid.show("Step 4: Dispatching API call...", ToastAndroid.SHORT);
+
+          dispatch(calculatePreviousStatement(monthStr))
+            .then((result) => {
+              // DEBUG: Step 5 (Success)
+              ToastAndroid.show("Step 5: API Success. Modal status: " + (showStatementModal ? "Visible" : "Hidden"), ToastAndroid.SHORT);
+              dispatch(fetchUserAccounts());
+            })
+            .catch((err) => {
+              // DEBUG: Step 5 (Error)
+              alert("Step 5 Error: " + err.message);
+              console.error("Statement calculation error:", err);
+            });
+        } catch (innerErr) {
+          alert("Inner Timeout Error: " + innerErr.message);
+        }
+      }, 500); // Increased delay slightly to 500ms
+    } catch (err) {
+      alert("Main Handler Error: " + err.message);
+    }
   };
 
   const onCalculateStatement = () => {
@@ -90,6 +124,9 @@ const HomeScreen = ({ navigation }) => {
   const [showSalaryModal, setShowSalaryModal] = useState(false);
   const [showBalanceModal, setShowBalanceModal] = useState(false);
   const [manualBalanceInput, setManualBalanceInput] = useState('');
+  const [activeSmsTab, setActiveSmsTab] = useState('finance');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [checkpointTime, setCheckpointTime] = useState(null); // The actual timestamp of the last message/scan boundary
 
   const handleSaveBalance = async () => {
     if (!manualBalanceInput) return;
@@ -112,19 +149,32 @@ const HomeScreen = ({ navigation }) => {
   };
 
   const handleSyncSMS = async () => {
-    ToastAndroid.show("Scanning SMS...", ToastAndroid.SHORT);
-    const result = await readAllSMS(false);
-    if (result) {
-      setSyncResult(result);
-      setShowSyncModal(true);
-      loadData();
+    if (isSyncing) return;
 
-      if (result.created > 0 || result.skipped > 0) {
-        await sendLocalNotification(
-          "Sync Complete 📊",
-          `Found ${result.created} new & ${result.skipped} existing transactions.`
-        );
+    setIsSyncing(true);
+    ToastAndroid.show("Syncing messages...", ToastAndroid.SHORT);
+
+    try {
+      // Use adequate delay for network operations to feel natural/allow UI update
+      const result = await readAllSMS(false);
+
+      if (result && !result.error) {
+        setSyncResult(result);
+        setShowSyncModal(true);
+        loadData();
+      } else {
+        const errorMsg = result?.error || "Unable to sync messages";
+        // Professional error feedback
+        if (errorMsg.includes("cancelled") || errorMsg.includes("permission")) {
+          ToastAndroid.show("Sync cancelled", ToastAndroid.SHORT);
+        } else {
+          ToastAndroid.show("Sync failed. Please check connection.", ToastAndroid.SHORT);
+        }
       }
+    } catch (e) {
+      ToastAndroid.show("An error occurred during sync", ToastAndroid.SHORT);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -150,6 +200,7 @@ const HomeScreen = ({ navigation }) => {
     categories,
     totalExpenses,
     uncategorizedCount,
+    lastSmsCheck,
   } = useSelector((state) => state.API);
 
   useEffect(() => {
@@ -159,14 +210,20 @@ const HomeScreen = ({ navigation }) => {
     }, 2000);
 
     const syncInterval = setInterval(() => {
-      console.log('⏰ HomeScreen: Triggering periodic 5-minute sync...');
+
       handleSyncSMS();
     }, 5 * 60 * 1000);
 
     return () => clearInterval(syncInterval);
   }, []);
 
-  const loadData = () => {
+  const loadData = async () => {
+    // Load Checkpoint for UI
+    try {
+      const ts = await AsyncStorage.getItem('last_sms_scan_timestamp');
+      if (ts) setCheckpointTime(parseInt(ts, 10));
+    } catch (e) { }
+
     dispatch(fetchLatestTransactions(4));
     dispatch(fetchTopSpendingCategories());
     dispatch(calculateMonthlySummary());
@@ -177,6 +234,7 @@ const HomeScreen = ({ navigation }) => {
     dispatch(fetchSavingsGoals());
     dispatch(fetchCategories());
     dispatch(fetchUncategorizedTransactions());
+    dispatch(fetchFinancialInsight());
   };
 
   const onRefresh = useCallback(() => {
@@ -282,14 +340,14 @@ const HomeScreen = ({ navigation }) => {
               <Icon name="pencil-circle" size={32} color="#6366F1" />
               <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Total Balance</Text>
             </View>
-            
+
             <Text style={[styles.modalDescription, { color: colors.textSecondary }]}>
               Manually setting this will lock your balance from being overwritten by older statements.
             </Text>
 
             <TextInput
-              style={[styles.modalInput, { 
-                borderColor: colors.border, 
+              style={[styles.modalInput, {
+                borderColor: colors.border,
                 color: colors.text,
                 backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC'
               }]}
@@ -301,14 +359,14 @@ const HomeScreen = ({ navigation }) => {
             />
 
             <View style={styles.modalActions}>
-              <TouchableOpacity 
-                onPress={() => setShowBalanceModal(false)} 
+              <TouchableOpacity
+                onPress={() => setShowBalanceModal(false)}
                 style={[styles.modalButton, styles.modalButtonSecondary, { borderColor: colors.border }]}
               >
                 <Text style={[styles.modalButtonTextSecondary, { color: colors.textSecondary }]}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                onPress={handleSaveBalance} 
+              <TouchableOpacity
+                onPress={handleSaveBalance}
                 style={[styles.modalButton, styles.modalButtonPrimary]}
               >
                 <Icon name="check-circle" size={18} color="#FFF" style={{ marginRight: 6 }} />
@@ -324,17 +382,17 @@ const HomeScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh} 
-            colors={['#6366F1']} 
-            tintColor={colors.text} 
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#6366F1']}
+            tintColor={colors.text}
           />
         }
       >
         {/* Premium Header with Gradient */}
-        <LinearGradient 
-          colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']} 
+        <LinearGradient
+          colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']}
           style={styles.header}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
@@ -350,8 +408,13 @@ const HomeScreen = ({ navigation }) => {
               <TouchableOpacity
                 style={styles.headerButton}
                 onPress={handleSyncSMS}
+                disabled={isSyncing}
               >
-                <Icon name="sync" size={20} color="#FFF" />
+                {isSyncing ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Icon name="sync" size={20} color="#FFF" />
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -380,6 +443,11 @@ const HomeScreen = ({ navigation }) => {
               <View style={styles.balanceLabelContainer}>
                 <Icon name="wallet" size={16} color="#94A3B8" style={{ marginRight: 6 }} />
                 <Text style={styles.balanceLabelText}>Total Balance</Text>
+                {checkpointTime && (
+                  <Text style={{ fontSize: 10, color: '#94A3B8', marginLeft: 8 }}>
+                    Checkpoint: {new Date(checkpointTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                )}
                 <TouchableOpacity onPress={() => setShowBalanceModal(true)} style={styles.editButton}>
                   <Icon name="pencil" size={14} color="#94A3B8" />
                 </TouchableOpacity>
@@ -425,8 +493,8 @@ const HomeScreen = ({ navigation }) => {
         {/* Quick Actions Grid */}
         <View style={styles.quickActionsWrapper}>
           <View style={styles.quickActionsGrid}>
-            <TouchableOpacity 
-              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]} 
+            <TouchableOpacity
+              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => navigation.navigate('Saving')}
             >
               <LinearGradient
@@ -440,8 +508,8 @@ const HomeScreen = ({ navigation }) => {
               <Text style={[styles.quickActionText, { color: colors.text }]}>Savings</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]} 
+            <TouchableOpacity
+              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => navigation.navigate('CurrencyConverter')}
             >
               <LinearGradient
@@ -475,8 +543,8 @@ const HomeScreen = ({ navigation }) => {
               <Text style={[styles.quickActionText, { color: colors.text }]}>Organize</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]} 
+            <TouchableOpacity
+              style={[styles.quickActionCard, { backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => setShowSalaryModal(true)}
             >
               <LinearGradient
@@ -548,11 +616,11 @@ const HomeScreen = ({ navigation }) => {
               <View style={[styles.progressTrack, { backgroundColor: isDarkMode ? '#334155' : '#F1F5F9' }]}>
                 <LinearGradient
                   colors={
-                    budgetPercentage > 90 
-                      ? ['#EF4444', '#DC2626'] 
-                      : budgetPercentage > 70 
-                      ? ['#F59E0B', '#D97706'] 
-                      : ['#10B981', '#059669']
+                    budgetPercentage > 90
+                      ? ['#EF4444', '#DC2626']
+                      : budgetPercentage > 70
+                        ? ['#F59E0B', '#D97706']
+                        : ['#10B981', '#059669']
                   }
                   style={[styles.progressFill, { width: `${Math.min(budgetPercentage, 100)}%` }]}
                   start={{ x: 0, y: 0 }}
@@ -588,9 +656,9 @@ const HomeScreen = ({ navigation }) => {
               {topCategories.slice(0, 4).map((cat, idx) => {
                 const details = CATEGORY_DETAILS_MAP[cat.category] || CATEGORY_DETAILS_MAP['Miscellaneous'];
                 return (
-                  <View key={idx} style={[styles.categoryCard, { 
+                  <View key={idx} style={[styles.categoryCard, {
                     backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC',
-                    borderColor: colors.border 
+                    borderColor: colors.border
                   }]}>
                     <View style={[styles.categoryIconWrapper, { backgroundColor: details.color + '20' }]}>
                       <Icon name={details.icon} size={24} color={details.color} />
@@ -620,9 +688,9 @@ const HomeScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
-            <View style={[styles.goalCard, { 
+            <View style={[styles.goalCard, {
               backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC',
-              borderColor: colors.border 
+              borderColor: colors.border
             }]}>
               <View style={styles.goalHeader}>
                 <View style={styles.goalEmojiContainer}>
@@ -866,17 +934,17 @@ const HomeScreen = ({ navigation }) => {
                         PROCESSED TRANSACTIONS
                       </Text>
 
-                      <View style={[styles.tableHeader, { 
-                        backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9' 
+                      <View style={[styles.tableHeader, {
+                        backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9'
                       }]}>
                         <Text style={[styles.tableHeaderText, { color: colors.textSecondary }]}>Date</Text>
                         <Text style={[styles.tableHeaderText, { color: colors.textSecondary, flex: 2 }]}>Description</Text>
                         <Text style={[styles.tableHeaderText, { color: colors.textSecondary, textAlign: 'right' }]}>Amount</Text>
                       </View>
 
-                      <View style={[styles.tableBody, { 
+                      <View style={[styles.tableBody, {
                         borderColor: isDarkMode ? '#334155' : '#E2E8F0',
-                        backgroundColor: colors.background 
+                        backgroundColor: colors.background
                       }]}>
                         <ScrollView style={styles.tableScroll}>
                           {statementResult.data.map((tx, idx) => {
@@ -926,8 +994,8 @@ const HomeScreen = ({ navigation }) => {
                                 </View>
 
                                 <View style={styles.tableAmountCell}>
-                                  <Text style={[styles.tableAmount, { 
-                                    color: tx.type === 'credit' ? '#10B981' : '#F43F5E' 
+                                  <Text style={[styles.tableAmount, {
+                                    color: tx.type === 'credit' ? '#10B981' : '#F43F5E'
                                   }]}>
                                     {tx.type === 'credit' ? '+' : '-'}{Math.abs(tx.amount).toLocaleString()}
                                   </Text>
@@ -989,42 +1057,668 @@ const HomeScreen = ({ navigation }) => {
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.syncModal, { backgroundColor: colors.card }]}>
+            <TouchableOpacity
+              onPress={() => setShowSyncModal(false)}
+              style={{
+                position: 'absolute',
+                top: 24,
+                right: 24,
+                zIndex: 10,
+                padding: 4,
+                backgroundColor: isDarkMode ? '#374151' : '#F3F4F6',
+                borderRadius: 20
+              }}
+            >
+              <Icon name="close" size={20} color={colors.text} />
+            </TouchableOpacity>
+
+            {/* Header Section */}
             <View style={styles.syncHeader}>
-              <View style={styles.syncIconContainer}>
-                <Icon name="sync" size={36} color="#10B981" />
+              <View style={[styles.syncIconContainer, {
+                backgroundColor: isDarkMode ? '#10B98115' : '#DCFCE7',
+                borderWidth: 2,
+                borderColor: isDarkMode ? '#10B98130' : '#86EFAC'
+              }]}>
+                <Icon name="sync" size={32} color="#10B981" />
               </View>
-              <Text style={[styles.syncTitle, { color: colors.text }]}>Sync Summary</Text>
-              <Text style={[styles.syncSubtitle, { color: colors.textSecondary }]}>
-                SMS synchronization complete
-              </Text>
+              <Text style={[styles.syncTitle, { color: colors.text }]}>Sync Complete</Text>
+
+              {/* Last Activity Info */}
+              <View style={{ alignItems: 'center', gap: 6, marginTop: 4 }}>
+                {/* Last Bank SMS Time */}
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  paddingHorizontal: 12,
+                  paddingVertical: 4,
+                  backgroundColor: isDarkMode ? '#1F2937' : '#F3F4F6',
+                  borderRadius: 20
+                }}>
+                  <Icon name="history" size={14} color={colors.textSecondary} />
+                  <Text style={{ fontSize: 12, color: colors.textSecondary, fontWeight: '500' }}>
+                    {syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0
+                      ? `Last Bank SMS: ${new Date(syncResult.lastBankingMessages[0].date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}`
+                      : `Last Scan: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}`
+                    }
+                  </Text>
+                </View>
+
+                {/* Scan Scope Badge */}
+                <Text style={{ fontSize: 10, color: colors.textSecondary, opacity: 0.8, marginTop: 4 }}>
+                  Looking for messages after: {syncResult?.scanFromDate ? new Date(syncResult.scanFromDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown'}
+                </Text>
+              </View>
             </View>
 
+            {/* Stats Grid */}
             <View style={styles.syncStatsGrid}>
-              <View style={styles.syncStatCard}>
-                <Text style={styles.syncStatValue}>{syncResult?.created || 0}</Text>
+              <View style={[styles.syncStatCard, { backgroundColor: isDarkMode ? '#1F2937' : '#F9FAFB' }]}>
+                <View style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: isDarkMode ? '#10B98120' : '#DCFCE7',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 8
+                }}>
+                  <Icon name="add-circle" size={20} color="#10B981" />
+                </View>
+                <Text style={[styles.syncStatValue, { color: '#10B981' }]}>
+                  {syncResult?.created || 0}
+                </Text>
                 <Text style={[styles.syncStatLabel, { color: colors.textSecondary }]}>New</Text>
               </View>
-              <View style={[styles.syncStatDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.syncStatCard}>
-                <Text style={[styles.syncStatValue, { color: '#6366F1' }]}>{syncResult?.skipped || 0}</Text>
+
+              <View style={[styles.syncStatCard, { backgroundColor: isDarkMode ? '#1F2937' : '#F9FAFB' }]}>
+                <View style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: isDarkMode ? '#6366F120' : '#E0E7FF',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 8
+                }}>
+                  <Icon name="sync-disabled" size={20} color="#6366F1" />
+                </View>
+                <Text style={[styles.syncStatValue, { color: '#6366F1' }]}>
+                  {syncResult?.skipped || 0}
+                </Text>
                 <Text style={[styles.syncStatLabel, { color: colors.textSecondary }]}>Skipped</Text>
               </View>
-              <View style={[styles.syncStatDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.syncStatCard}>
-                <Text style={[styles.syncStatValue, { color: '#EF4444' }]}>{syncResult?.failed || 0}</Text>
+
+              <View style={[styles.syncStatCard, { backgroundColor: isDarkMode ? '#1F2937' : '#F9FAFB' }]}>
+                <View style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: isDarkMode ? '#EF444420' : '#FEE2E2',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 8
+                }}>
+                  <Icon name="error" size={20} color="#EF4444" />
+                </View>
+                <Text style={[styles.syncStatValue, { color: '#EF4444' }]}>
+                  {syncResult?.failed || 0}
+                </Text>
                 <Text style={[styles.syncStatLabel, { color: colors.textSecondary }]}>Failed</Text>
               </View>
             </View>
 
+            {/* New Transactions Section */}
+            {syncResult?.transactions && syncResult.transactions.filter(t => t.is_new).length > 0 && (
+              <View style={{ marginVertical: 16 }}>
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  marginBottom: 12,
+                  gap: 8
+                }}>
+                  <View style={{
+                    width: 4,
+                    height: 18,
+                    backgroundColor: '#10B981',
+                    borderRadius: 2
+                  }} />
+                  <Text style={{
+                    fontSize: 15,
+                    fontWeight: '700',
+                    color: colors.text
+                  }}>
+                    Added Transactions
+                  </Text>
+                  <View style={{
+                    backgroundColor: isDarkMode ? '#10B98120' : '#DCFCE7',
+                    paddingHorizontal: 8,
+                    paddingVertical: 2,
+                    borderRadius: 12
+                  }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#10B981' }}>
+                      {syncResult.transactions.filter(t => t.is_new).length}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={{
+                  backgroundColor: isDarkMode ? '#111827' : '#FFFFFF',
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: isDarkMode ? '#374151' : '#E5E7EB',
+                  overflow: 'hidden'
+                }}>
+                  <ScrollView
+                    style={{ maxHeight: 220 }}
+                    contentContainerStyle={{ padding: 4 }}
+                  >
+                    {syncResult.transactions.filter(t => t.is_new).map((tx, idx) => (
+                      <View key={idx} style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        paddingVertical: 12,
+                        paddingHorizontal: 12,
+                        marginVertical: 2,
+                        backgroundColor: isDarkMode ? '#1F2937' : '#F9FAFB',
+                        borderRadius: 8
+                      }}>
+                        <View style={{ flex: 1, marginRight: 12 }}>
+                          <Text style={{
+                            fontSize: 14,
+                            color: colors.text,
+                            fontWeight: '600',
+                            marginBottom: 4
+                          }} numberOfLines={1}>
+                            {tx.purpose || 'Uncategorized'}
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={{
+                              fontSize: 11,
+                              color: colors.textSecondary,
+                              backgroundColor: isDarkMode ? '#374151' : '#E5E7EB',
+                              paddingHorizontal: 6,
+                              paddingVertical: 2,
+                              borderRadius: 4,
+                              fontWeight: '500'
+                            }}>
+                              {tx.id}
+                            </Text>
+                            <Text style={{
+                              fontSize: 11,
+                              color: tx.type === 'credit' ? '#10B981' : '#EF4444',
+                              fontWeight: '600'
+                            }}>
+                              {tx.type.toUpperCase()}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                          borderRadius: 8,
+                          backgroundColor: tx.type === 'credit'
+                            ? (isDarkMode ? '#10B98115' : '#DCFCE7')
+                            : (isDarkMode ? '#EF444415' : '#FEE2E2')
+                        }}>
+                          <Text style={{
+                            fontSize: 15,
+                            fontWeight: '700',
+                            color: tx.type === 'credit' ? '#10B981' : '#EF4444'
+                          }}>
+                            {tx.type === 'credit' ? '+' : '-'} {Math.abs(tx.amount).toLocaleString()}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+            )}
+
+            {/* Banking Messages Status */}
+            {!syncResult?.hasRecentBankingMessages && syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0 && (
+              <View style={{
+                marginVertical: 12,
+                padding: 16,
+                backgroundColor: isDarkMode ? '#1F2937' : '#FEF3C7',
+                borderRadius: 12,
+                borderLeftWidth: 4,
+                borderLeftColor: '#F59E0B'
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <View style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: isDarkMode ? '#F59E0B20' : '#FDE68A',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <Icon name="schedule" size={18} color="#F59E0B" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: isDarkMode ? '#FCD34D' : '#D97706' }}>
+                      No Recent Banking Messages
+                    </Text>
+                    <Text style={{ fontSize: 11, color: isDarkMode ? '#FDE68A' : '#92400E', marginTop: 2 }}>
+                      No transactions in the last hour
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={{
+                  marginTop: 12,
+                  paddingTop: 12,
+                  borderTopWidth: 1,
+                  borderTopColor: isDarkMode ? '#374151' : '#FDE68A'
+                }}>
+                  <Text style={{
+                    fontSize: 12,
+                    fontWeight: '600',
+                    color: isDarkMode ? '#FDE68A' : '#92400E',
+                    marginBottom: 10
+                  }}>
+                    Last Banking Messages:
+                  </Text>
+
+                  <ScrollView
+                    style={{ maxHeight: 200 }}
+                    nestedScrollEnabled={true}
+                  >
+                    {syncResult.lastBankingMessages.map((msg, idx) => {
+                      // Get friendly name for sender
+                      const addressStr = (msg.address || "").toUpperCase();
+                      let displayName = msg.address;
+                      if (addressStr.endsWith('8810')) displayName = 'Easypaisa';
+                      else if (addressStr.endsWith('8812')) displayName = 'JazzCash';
+                      else if (addressStr.includes('BAHL') || addressStr.includes('HABIB')) displayName = 'Bank Al Habib';
+                      else if (addressStr.endsWith('3737')) displayName = 'Easypaisa';
+
+                      return (
+                        <View key={idx} style={{
+                          backgroundColor: isDarkMode ? '#374151' : '#FFFFFF',
+                          padding: 12,
+                          borderRadius: 10,
+                          marginBottom: 8,
+                          borderWidth: 1,
+                          borderColor: isDarkMode ? '#4B5563' : '#FDE68A'
+                        }}>
+                          {/* Header with sender and date */}
+                          <View style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            marginBottom: 8
+                          }}>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <Text style={{
+                                fontSize: 13,
+                                fontWeight: '700',
+                                color: isDarkMode ? '#FFFFFF' : '#1F2937',
+                                marginBottom: 4
+                              }}>
+                                {displayName}
+                              </Text>
+                              <View style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: 6
+                              }}>
+                                <Icon name="access-time" size={12} color="#F59E0B" />
+                                <Text style={{
+                                  fontSize: 11,
+                                  color: isDarkMode ? '#FCD34D' : '#D97706',
+                                  fontWeight: '600'
+                                }}>
+                                  {new Date(msg.date).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric'
+                                  })} at {new Date(msg.date).toLocaleTimeString('en-US', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true
+                                  })}
+                                </Text>
+                              </View>
+                            </View>
+
+                            {/* Time ago badge */}
+                            <View style={{
+                              backgroundColor: isDarkMode ? '#F59E0B20' : '#FDE68A',
+                              paddingHorizontal: 8,
+                              paddingVertical: 4,
+                              borderRadius: 6
+                            }}>
+                              <Text style={{
+                                fontSize: 10,
+                                fontWeight: '700',
+                                color: '#F59E0B'
+                              }}>
+                                {(() => {
+                                  const diff = Date.now() - msg.date;
+                                  const hours = Math.floor(diff / (1000 * 60 * 60));
+                                  const days = Math.floor(hours / 24);
+
+                                  if (days > 0) return `${days}d ago`;
+                                  if (hours > 0) return `${hours}h ago`;
+                                  const mins = Math.floor(diff / (1000 * 60));
+                                  return `${mins}m ago`;
+                                })()}
+                              </Text>
+                            </View>
+                          </View>
+
+                          {/* Message body */}
+                          <View style={{
+                            backgroundColor: isDarkMode ? '#1F2937' : '#FFFBEB',
+                            padding: 10,
+                            borderRadius: 8,
+                            borderLeftWidth: 3,
+                            borderLeftColor: '#F59E0B'
+                          }}>
+                            <Text style={{
+                              fontSize: 12,
+                              color: isDarkMode ? '#D1D5DB' : '#374151',
+                              lineHeight: 18
+                            }} numberOfLines={3}>
+                              {msg.body}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              </View>
+            )}
+
+            {/* Recent SMS Section - TABBED */}
+            <View style={{ marginVertical: 16 }}>
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginBottom: 12,
+                gap: 8
+              }}>
+                <View style={{
+                  width: 4,
+                  height: 18,
+                  backgroundColor: '#6366F1',
+                  borderRadius: 2
+                }} />
+                <Text style={{
+                  fontSize: 15,
+                  fontWeight: '700',
+                  color: colors.text
+                }}>
+                  Recent Messages
+                </Text>
+              </View>
+
+              {(() => {
+                const allMsgs = syncResult?.recentMessages || [];
+                const financeMsgs = allMsgs.filter(m => m.status === 'READ');
+                const otherMsgs = allMsgs.filter(m => m.status !== 'READ');
+                const displayedMsgs = activeSmsTab === 'finance' ? financeMsgs : otherMsgs;
+
+                return (
+                  <>
+                    {/* Tabs */}
+                    <View style={{
+                      flexDirection: 'row',
+                      backgroundColor: isDarkMode ? '#111827' : '#F3F4F6',
+                      borderRadius: 12,
+                      padding: 4,
+                      marginBottom: 12,
+                      borderWidth: 1,
+                      borderColor: isDarkMode ? '#374151' : '#E5E7EB'
+                    }}>
+                      <TouchableOpacity
+                        onPress={() => setActiveSmsTab('finance')}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                          backgroundColor: activeSmsTab === 'finance'
+                            ? (isDarkMode ? '#1F2937' : '#FFFFFF')
+                            : 'transparent',
+                          borderRadius: 10,
+                          alignItems: 'center',
+                          shadowColor: activeSmsTab === 'finance' ? '#000' : 'transparent',
+                          shadowOffset: { width: 0, height: 1 },
+                          shadowOpacity: activeSmsTab === 'finance' ? 0.1 : 0,
+                          shadowRadius: 2,
+                          elevation: activeSmsTab === 'finance' ? 2 : 0
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Icon
+                            name="account-balance"
+                            size={16}
+                            color={activeSmsTab === 'finance' ? '#10B981' : colors.textSecondary}
+                          />
+                          <Text style={{
+                            fontWeight: activeSmsTab === 'finance' ? '700' : '600',
+                            fontSize: 13,
+                            color: activeSmsTab === 'finance'
+                              ? (isDarkMode ? '#FFFFFF' : '#0F172A')
+                              : colors.textSecondary
+                          }}>
+                            Banking
+                          </Text>
+                          <View style={{
+                            backgroundColor: activeSmsTab === 'finance'
+                              ? (isDarkMode ? '#10B98125' : '#DCFCE7')
+                              : (isDarkMode ? '#374151' : '#E5E7EB'),
+                            paddingHorizontal: 7,
+                            paddingVertical: 2,
+                            borderRadius: 10
+                          }}>
+                            <Text style={{
+                              fontSize: 11,
+                              fontWeight: '700',
+                              color: activeSmsTab === 'finance' ? '#10B981' : colors.textSecondary
+                            }}>
+                              {financeMsgs.length}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        onPress={() => setActiveSmsTab('other')}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                          backgroundColor: activeSmsTab === 'other'
+                            ? (isDarkMode ? '#1F2937' : '#FFFFFF')
+                            : 'transparent',
+                          borderRadius: 10,
+                          alignItems: 'center',
+                          shadowColor: activeSmsTab === 'other' ? '#000' : 'transparent',
+                          shadowOffset: { width: 0, height: 1 },
+                          shadowOpacity: activeSmsTab === 'other' ? 0.1 : 0,
+                          shadowRadius: 2,
+                          elevation: activeSmsTab === 'other' ? 2 : 0
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Icon
+                            name="mail"
+                            size={16}
+                            color={activeSmsTab === 'other' ? '#6366F1' : colors.textSecondary}
+                          />
+                          <Text style={{
+                            fontWeight: activeSmsTab === 'other' ? '700' : '600',
+                            fontSize: 13,
+                            color: activeSmsTab === 'other'
+                              ? (isDarkMode ? '#FFFFFF' : '#0F172A')
+                              : colors.textSecondary
+                          }}>
+                            Others
+                          </Text>
+                          <View style={{
+                            backgroundColor: activeSmsTab === 'other'
+                              ? (isDarkMode ? '#6366F125' : '#E0E7FF')
+                              : (isDarkMode ? '#374151' : '#E5E7EB'),
+                            paddingHorizontal: 7,
+                            paddingVertical: 2,
+                            borderRadius: 10
+                          }}>
+                            <Text style={{
+                              fontSize: 11,
+                              fontWeight: '700',
+                              color: activeSmsTab === 'other' ? '#6366F1' : colors.textSecondary
+                            }}>
+                              {otherMsgs.length}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Messages List */}
+                    <View style={{
+                      backgroundColor: isDarkMode ? '#111827' : '#FFFFFF',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: isDarkMode ? '#374151' : '#E5E7EB',
+                      overflow: 'hidden'
+                    }}>
+                      <ScrollView
+                        style={{ maxHeight: 280 }}
+                        contentContainerStyle={{ padding: 8 }}
+                        nestedScrollEnabled={true}
+                      >
+                        {displayedMsgs.length === 0 ? (
+                          <View style={{
+                            paddingVertical: 40,
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            <Icon
+                              name={activeSmsTab === 'finance' ? 'account-balance' : 'mail-outline'}
+                              size={48}
+                              color={isDarkMode ? '#374151' : '#D1D5DB'}
+                            />
+                            <Text style={{
+                              marginTop: 12,
+                              fontSize: 13,
+                              color: colors.textSecondary,
+                              fontWeight: '500'
+                            }}>
+                              No {activeSmsTab === 'finance' ? 'banking' : 'other'} messages found
+                            </Text>
+                          </View>
+                        ) : (
+                          displayedMsgs.map((msg, idx) => (
+                            <View key={idx} style={{
+                              paddingVertical: 12,
+                              paddingHorizontal: 12,
+                              marginBottom: 6,
+                              backgroundColor: isDarkMode ? '#1F2937' : '#F9FAFB',
+                              borderRadius: 10,
+                              borderLeftWidth: 3,
+                              borderLeftColor: activeSmsTab === 'finance' ? '#10B981' : '#6366F1'
+                            }}>
+                              {/* Header Row */}
+                              <View style={{
+                                flexDirection: 'row',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                marginBottom: 8
+                              }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                                  <View style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: 4,
+                                    backgroundColor: activeSmsTab === 'finance' ? '#10B981' : '#6366F1'
+                                  }} />
+                                  <Text style={{
+                                    fontSize: 14,
+                                    fontWeight: '700',
+                                    color: colors.text,
+                                    flex: 1
+                                  }} numberOfLines={1}>
+                                    {msg.address}
+                                  </Text>
+                                </View>
+                                <View style={{
+                                  backgroundColor: isDarkMode ? '#374151' : '#E5E7EB',
+                                  paddingHorizontal: 8,
+                                  paddingVertical: 4,
+                                  borderRadius: 6
+                                }}>
+                                  <Text style={{
+                                    fontSize: 10,
+                                    color: colors.textSecondary,
+                                    fontWeight: '600'
+                                  }}>
+                                    {new Date(msg.date).toLocaleDateString('en-US', {
+                                      month: 'short',
+                                      day: 'numeric'
+                                    })} • {new Date(msg.date).toLocaleTimeString('en-US', {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                      hour12: true
+                                    })}
+                                  </Text>
+                                </View>
+                              </View>
+
+                              {/* Message Body */}
+                              <Text style={{
+                                fontSize: 12,
+                                color: colors.textSecondary,
+                                lineHeight: 18,
+                                paddingLeft: 16
+                              }} numberOfLines={2}>
+                                {msg.body}
+                              </Text>
+                            </View>
+                          ))
+                        )}
+                      </ScrollView>
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+
+            {/* Errors Section */}
             {syncResult?.errors && syncResult.errors.length > 0 && (
-              <View style={styles.syncErrors}>
-                <Text style={[styles.syncErrorsTitle, { color: colors.text }]}>Details / Errors:</Text>
-                <ScrollView style={styles.syncErrorsList}>
+              <View style={{
+                marginVertical: 12,
+                padding: 12,
+                backgroundColor: isDarkMode ? '#7F1D1D' : '#FEE2E2',
+                borderRadius: 12,
+                borderLeftWidth: 4,
+                borderLeftColor: '#EF4444'
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <Icon name="error" size={18} color="#EF4444" />
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: isDarkMode ? '#FCA5A5' : '#DC2626' }}>
+                    Parsing Errors ({syncResult.errors.length})
+                  </Text>
+                </View>
+                <ScrollView style={{ maxHeight: 120 }}>
                   {syncResult.errors.map((err, idx) => (
-                    <View key={idx} style={styles.syncErrorItem}>
-                      <Text style={styles.syncErrorText}>{err.error}</Text>
+                    <View key={idx} style={{
+                      marginBottom: 8,
+                      paddingBottom: 8,
+                      borderBottomWidth: idx === syncResult.errors.length - 1 ? 0 : 1,
+                      borderBottomColor: isDarkMode ? '#991B1B' : '#FECACA'
+                    }}>
+                      <Text style={{ fontSize: 12, color: isDarkMode ? '#FCA5A5' : '#B91C1C', fontWeight: '600' }}>
+                        {err.error}
+                      </Text>
                       {err.message && (
-                        <Text style={[styles.syncErrorMessage, { color: colors.textSecondary }]}>
+                        <Text style={{ fontSize: 11, color: isDarkMode ? '#FED7D7' : '#DC2626', marginTop: 4 }}>
                           {err.message}
                         </Text>
                       )}
@@ -1034,19 +1728,52 @@ const HomeScreen = ({ navigation }) => {
               </View>
             )}
 
-            <TouchableOpacity
-              onPress={() => setShowSyncModal(false)}
-              style={styles.syncDoneButton}
-            >
-              <LinearGradient
-                colors={['#10B981', '#059669']}
-                style={styles.syncDoneGradient}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
+            {/* Action Buttons */}
+            <View style={{ gap: 10, marginTop: 8 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowSyncModal(false);
+                  navigation.navigate('Transaction');
+                }}
+                style={{
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  backgroundColor: '#8B5CF6',
+                  shadowColor: '#8B5CF6',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 8,
+                  elevation: 4
+                }}
               >
-                <Text style={styles.syncDoneText}>Great!</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <Icon name="bar-chart" size={18} color="#FFFFFF" />
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#FFFFFF' }}>
+                    View Analytics
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setShowSyncModal(false)}
+                style={{
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  backgroundColor: 'transparent',
+                  borderWidth: 1.5,
+                  borderColor: isDarkMode ? '#374151' : '#D1D5DB'
+                }}
+              >
+                <Text style={{
+                  fontSize: 15,
+                  fontWeight: '600',
+                  color: colors.text,
+                  textAlign: 'center'
+                }}>
+                  Done
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -1075,7 +1802,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 32,
   },
-  
+
   // Header Styles
   header: {
     borderBottomLeftRadius: 40,
@@ -1144,7 +1871,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: 'bold',
   },
-  
+
   // Balance Card Styles
   balanceCard: {
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
@@ -1233,7 +1960,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
-  
+
   // Quick Actions Styles
   quickActionsWrapper: {
     paddingHorizontal: 24,
@@ -1293,7 +2020,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: 'bold',
   },
-  
+
   // Alert Card Styles
   alertWrapper: {
     paddingHorizontal: 24,
@@ -1336,7 +2063,7 @@ const styles = StyleSheet.create({
   alertAction: {
     marginLeft: 12,
   },
-  
+
   // Card Styles
   card: {
     marginHorizontal: 24,
@@ -1384,7 +2111,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
-  
+
   // Budget Styles
   budgetDisplay: {
     flexDirection: 'row',
@@ -1440,7 +2167,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flex: 1,
   },
-  
+
   // Categories Grid Styles
   categoriesGrid: {
     flexDirection: 'row',
@@ -1477,7 +2204,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: -0.3,
   },
-  
+
   // Goal Card Styles
   goalCard: {
     borderRadius: 20,
@@ -1497,13 +2224,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  goalEmoji: {
+
     fontSize: 26,
   },
   goalDetails: {
@@ -1558,7 +2279,7 @@ const styles = StyleSheet.create({
     color: '#6366F1',
     fontWeight: '600',
   },
-  
+
   // Statement Button Styles
   statementWrapper: {
     paddingHorizontal: 24,
@@ -1586,7 +2307,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
-  
+
   // Transactions List Styles
   transactionsList: {
     gap: 0,
@@ -1645,7 +2366,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontWeight: '500',
   },
-  
+
   // Modal Styles
   modalOverlay: {
     flex: 1,
@@ -1720,7 +2441,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
   },
-  
+
   // Statement Modal Styles
   statementModal: {
     width: '92%',
@@ -1961,36 +2682,41 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
-  
+
   // Sync Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-end',
+  },
   syncModal: {
-    borderRadius: 32,
-    padding: 28,
-    width: '92%',
-    maxHeight: '80%',
+    maxHeight: '90%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 32,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
   },
   syncHeader: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   syncIconContainer: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    justifyContent: 'center',
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'center',
+    marginBottom: 12,
   },
   syncTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 6,
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 4,
   },
   syncSubtitle: {
     fontSize: 14,
@@ -1998,73 +2724,67 @@ const styles = StyleSheet.create({
   },
   syncStatsGrid: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(99, 102, 241, 0.05)',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 24,
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginVertical: 20,
   },
   syncStatCard: {
+    flex: 1,
     alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
   },
   syncStatValue: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#10B981',
-    marginBottom: 6,
+    fontWeight: '800',
+    marginBottom: 4,
   },
   syncStatLabel: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   syncStatDivider: {
     width: 1,
-  },
-  syncErrors: {
-    marginBottom: 24,
+    height: '100%',
   },
   syncErrorsTitle: {
     fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 12,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  syncErrors: {
+    marginVertical: 12,
   },
   syncErrorsList: {
-    maxHeight: 160,
+    maxHeight: 120,
   },
   syncErrorItem: {
-    marginBottom: 12,
-    padding: 12,
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderRadius: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#EF4444',
+    marginBottom: 8,
+    paddingBottom: 8,
   },
   syncErrorText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#EF4444',
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontWeight: '600',
   },
   syncErrorMessage: {
-    fontSize: 12,
+    fontSize: 11,
+    marginTop: 4,
   },
   syncDoneButton: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    paddingVertical: 14,
+    borderRadius: 12,
   },
   syncDoneGradient: {
-    paddingVertical: 16,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   syncDoneText: {
+    fontSize: 15,
+    fontWeight: '700',
     color: '#FFFFFF',
-    fontWeight: 'bold',
-    fontSize: 17,
   },
 });
 

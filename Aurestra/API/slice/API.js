@@ -3,7 +3,7 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from "../../API_URL"
 import { ToastAndroid } from 'react-native';
-import { reset } from '../../navigation/RootNavigation';
+// import { reset } from '../../navigation/RootNavigation'; // Avoiding circular dependency
 
 // =======================================================
 // AXIOS CONFIGURATION
@@ -32,7 +32,7 @@ axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-      console.log('🚨 401/403 Error - Clearing auth and redirecting to login');
+
 
       // Clear all auth data
       await AsyncStorage.removeItem('userToken');
@@ -42,7 +42,7 @@ axios.interceptors.response.use(
       ToastAndroid.show('⚠️ Session expired. Please login again.', ToastAndroid.LONG);
 
       // Force navigation to login screen
-      reset('Login');
+      // reset('Login'); // Loop fix
 
       // App.js will automatically redirect to login when token is null
     }
@@ -95,8 +95,8 @@ export const loginWithGoogle = createAsyncThunk(
   async ({ idToken, serverAuthCode }, { rejectWithValue }) => {
     try {
       const url = `${API_BASE_URL}/api/google/login`;
-      console.log('🚀 [Google Login] Sending Request to:', url);
-      console.log('🚀 [Google Login] Payload:', { idToken: idToken.substring(0, 20) + '...', serverAuthCode: serverAuthCode ? 'PRESENT' : 'MISSING' });
+
+
 
       const response = await axios.post(url, { idToken, serverAuthCode });
       if (response.data.token) {
@@ -168,7 +168,7 @@ export const fetchBudget = createAsyncThunk(
 export const saveBudget = createAsyncThunk(
   'api/saveBudget',
   async (budgetData, { rejectWithValue }) => {
-    console.log('saveBudget called with data:', budgetData);
+
     try {
       if (typeof budgetData.income !== 'number' || budgetData.income <= 0) {
         console.error('Validation Error: Income must be a positive number.', budgetData.income);
@@ -387,6 +387,22 @@ export const updateTransaction = createAsyncThunk(
   }
 );
 
+export const createTransaction = createAsyncThunk(
+  'api/createTransaction',
+  async (txData, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/transactions`, txData);
+      dispatch(fetchLatestTransactions(50));
+      dispatch(fetchTopSpendingCategories());
+      dispatch(fetchTotalExpenses());
+      dispatch(fetchTrendHistory());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to create transaction');
+    }
+  }
+);
+
 export const fetchTopSpendingCategories = createAsyncThunk(
   'api/fetchTopSpendingCategories',
   async (period = 'month', { rejectWithValue }) => {
@@ -485,12 +501,12 @@ export const processSMSBatch = createAsyncThunk(
         return rejectWithValue('No messages to process');
       }
 
-      console.log(`🚀 Sending batch of ${messages.length} SMS to backend...`);
+
       const response = await axios.post(`${API_BASE_URL}/api/sms/batch`, {
         messages
       });
 
-      console.log('✅ Batch response:', response.data);
+
       return response.data; // { created, skipped, failed, transactions, errors }
     } catch (error) {
       const errorMessage = error?.response?.data?.message ||
@@ -507,7 +523,7 @@ export const fetchFinancialInsight = createAsyncThunk(
   async (month = null, { rejectWithValue }) => {
     try {
       const url = month ? `${API_BASE_URL}/api/insights?month=${month}` : `${API_BASE_URL}/api/insights`;
-      console.log('Fetching insight from:', url);
+
       const response = await axios.get(url);
       return response.data;
     } catch (error) {
@@ -792,6 +808,18 @@ export const fetchCategorizationRules = createAsyncThunk(
   }
 );
 
+export const triggerManualBackup = createAsyncThunk(
+  'api/triggerManualBackup',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/backup/trigger`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Backup failed');
+    }
+  }
+);
+
 export const createCategorizationRule = createAsyncThunk(
   'api/createCategorizationRule',
   async ({ merchant_pattern, category_id }, { rejectWithValue, dispatch }) => {
@@ -1066,7 +1094,7 @@ const APISlice = createSlice({
       })
       .addCase(fetchCurrentSummary.fulfilled, (state, action) => {
         state.summaryStatus = 'succeeded';
-        console.log('API Slice: fetchCurrentSummary.fulfilled payload:', action.payload);
+
         state.currentSummary = action.payload;
       })
       .addCase(fetchCurrentSummary.rejected, (state, action) => {
@@ -1195,7 +1223,7 @@ const APISlice = createSlice({
       })
       .addCase(fetchTotalExpenses.fulfilled, (state, action) => {
         state.totalExpenses = action.payload.total_expense || 0;
-        console.log("✅ Total Expenses Updated:", state.totalExpenses);
+
       })
       .addCase(fetchTotalExpenses.rejected, (state, action) => {
         console.error("❌ Failed to fetch total expenses:", action.payload);

@@ -228,3 +228,35 @@ def download_json(service, file_id):
     except Exception as e:
         print(f"❌ Download JSON error: {e}")
         return None
+
+def upload_file_from_path(service, folder_id, filename, filepath, mimetype='application/octet-stream'):
+    """Uploads a local file to Drive."""
+    try:
+        media = MediaIoBaseUpload(io.FileIO(filepath, 'rb'), mimetype=mimetype, resumable=True)
+        
+        # Check if file exists to update
+        existing = find_file(service, folder_id, filename)
+        
+        file_metadata = {'name': filename}
+        
+        if existing:
+            # Update
+            service.files().update(
+                fileId=existing, 
+                media_body=media
+            ).execute()
+            print(f"✅ Updated existing backup '{filename}' in Drive.")
+        else:
+            # Create
+            file_metadata['parents'] = [folder_id]
+            service.files().create(
+                body=file_metadata, 
+                media_body=media, 
+                fields='id'
+            ).execute()
+            print(f"✅ Uploaded new backup '{filename}' to Drive.")
+            
+        return True
+    except Exception as e:
+        print(f"❌ Upload File error: {e}")
+        return False

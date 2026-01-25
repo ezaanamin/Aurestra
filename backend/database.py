@@ -26,7 +26,9 @@ if MYSQL_USER is not None:
              print(f"✅ [Database] Using PostgreSQL ({MYSQL_HOST})")
         else:
              import mysql.connector
-             app.config['SQLALCHEMY_DATABASE_URI'] = f"mysql+mysqlconnector://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
+             import urllib.parse
+             password_safe = urllib.parse.quote_plus(MYSQL_PASSWORD)
+             app.config['SQLALCHEMY_DATABASE_URI'] = f"mysql+mysqlconnector://{MYSQL_USER}:{password_safe}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
              print(f"✅ [Database] Using MySQL ({MYSQL_HOST})")
              
     except ImportError as e:

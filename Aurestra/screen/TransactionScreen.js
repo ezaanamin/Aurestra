@@ -11,7 +11,12 @@ import {
     SafeAreaView,
     ActivityIndicator,
     Modal,
-    Animated
+    Animated,
+    TextInput,
+    Switch,
+    Alert,
+    KeyboardAvoidingView,
+    Platform
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
@@ -23,6 +28,7 @@ import {
     fetchLatestTransactions,
     fetchTopSpendingCategories,
     updateTransaction,
+    createTransaction,
     fetchCategories,
     fetchTotalExpenses,
     fetchFinancialInsight
@@ -49,7 +55,7 @@ const CATEGORY_DETAILS_MAP = {
     "Income": { icon: 'bank-transfer-in', color: '#10B981' },
 };
 
-const TransactionScreen = ({ navigation }) => {
+const TransactionScreen = ({ navigation, route }) => {
     const dispatch = useDispatch();
     const [animatedValue] = useState(new Animated.Value(0));
     const [scrollY] = useState(new Animated.Value(0));
@@ -73,6 +79,41 @@ const TransactionScreen = ({ navigation }) => {
     const [activeFilter, setActiveFilter] = useState('all');
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedTransaction, setSelectedTransaction] = useState(null);
+
+    // Add Transaction State
+    const [addModalVisible, setAddModalVisible] = useState(false);
+    const [newAmount, setNewAmount] = useState('');
+    const [newType, setNewType] = useState('debit');
+    const [newCategory, setNewCategory] = useState('Miscellaneous');
+    const [newNotes, setNewNotes] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleAddTransaction = async () => {
+        if (!newAmount || parseFloat(newAmount) <= 0) {
+            Alert.alert('Error', 'Please enter a valid amount');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            await dispatch(createTransaction({
+                amount: parseFloat(newAmount),
+                type: newType,
+                category: newCategory,
+                notes: newNotes,
+                date: new Date().toISOString().split('T')[0]
+            })).unwrap();
+            setAddModalVisible(false);
+            setNewAmount('');
+            setNewNotes('');
+            setNewType('debit');
+            setNewCategory('Miscellaneous');
+            // Alert.alert('Success', 'Transaction added');
+        } catch (e) {
+            Alert.alert('Error', e || 'Failed to add transaction');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
 
     const openEditModal = (transaction) => {
         setSelectedTransaction(transaction);
@@ -114,6 +155,17 @@ const TransactionScreen = ({ navigation }) => {
             useNativeDriver: true,
         }).start();
     }, []);
+
+    // Handle Deep Linking from Profile
+    useEffect(() => {
+        if (route.params?.openAddModal) {
+            setAddModalVisible(true);
+            // Clear param so it doesn't reopen on focus if not desired, 
+            // but navigation.setParams might trigger re-render. 
+            // Simpler to just open it.
+            navigation.setParams({ openAddModal: undefined });
+        }
+    }, [route.params]);
 
     const onRefresh = () => {
         setRefreshing(true);
@@ -253,13 +305,17 @@ const TransactionScreen = ({ navigation }) => {
                                 <Ionicons name="arrow-back" size={22} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
                             </View>
                         </TouchableOpacity>
-                        
-                        <TouchableOpacity style={styles.notificationButton}>
-                            <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)' }]}>
-                                <Ionicons name="notifications-outline" size={22} color="#8B5CF6" />
-                                <View style={styles.notificationDot} />
-                            </View>
-                        </TouchableOpacity>
+
+                        <View style={{ flexDirection: 'row', gap: 12 }}>
+                            <TouchableOpacity
+                                style={styles.notificationButton}
+                                onPress={() => setAddModalVisible(true)}
+                            >
+                                <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)' }]}>
+                                    <Ionicons name="add" size={24} color="#8B5CF6" />
+                                </View>
+                            </TouchableOpacity>
+                        </View>
                     </View>
 
                     <View style={styles.heroContent}>
@@ -675,7 +731,7 @@ const TransactionScreen = ({ navigation }) => {
                         backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF'
                     }]}>
                         <View style={styles.modalHandle} />
-                        
+
                         <View style={styles.modalHeader}>
                             <View>
                                 <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
@@ -739,6 +795,146 @@ const TransactionScreen = ({ navigation }) => {
                         </ScrollView>
                     </View>
                 </View>
+            </Modal>
+
+            {/* Add Transaction Modal */}
+            <Modal
+                animationType="slide"
+                transparent={true}
+                visible={addModalVisible}
+                onRequestClose={() => setAddModalVisible(false)}
+            >
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === "ios" ? "padding" : "height"}
+                    style={styles.modalOverlay}
+                >
+                    <TouchableOpacity
+                        style={styles.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => setAddModalVisible(false)}
+                    />
+                    <View style={[styles.modalContent, {
+                        backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF'
+                    }]}>
+                        <View style={styles.modalHandle} />
+
+                        <View style={styles.modalHeader}>
+                            <View>
+                                <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
+                                    New Transaction
+                                </Text>
+                                <Text style={[styles.modalSubtitle, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
+                                    Add a manual entry
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                style={[styles.manageButton, {
+                                    backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5'
+                                }]}
+                                onPress={() => setAddModalVisible(false)}
+                            >
+                                <Ionicons name="close" size={20} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+                            {/* Amount Input */}
+                            <View style={styles.inputGroup}>
+                                <Text style={[styles.inputLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>Amount</Text>
+                                <TextInput
+                                    style={[styles.input, {
+                                        backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5',
+                                        color: isDarkMode ? '#FFFFFF' : '#1A1A1D',
+                                        borderColor: isDarkMode ? '#3F3F46' : '#E4E4E7'
+                                    }]}
+                                    placeholder="0.00"
+                                    placeholderTextColor={isDarkMode ? '#71717A' : '#A1A1AA'}
+                                    keyboardType="numeric"
+                                    value={newAmount}
+                                    onChangeText={setNewAmount}
+                                />
+                            </View>
+
+                            {/* Type Selector */}
+                            <View style={styles.inputGroup}>
+                                <Text style={[styles.inputLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>Type</Text>
+                                <View style={{ flexDirection: 'row', gap: 12 }}>
+                                    <TouchableOpacity
+                                        style={[styles.typeButton, {
+                                            backgroundColor: newType === 'debit' ? '#EF4444' : (isDarkMode ? '#27272A' : '#F4F4F5'),
+                                            flex: 1
+                                        }]}
+                                        onPress={() => setNewType('debit')}
+                                    >
+                                        <Text style={[styles.typeButtonText, { color: newType === 'debit' ? '#FFFFFF' : (isDarkMode ? '#A1A1AA' : '#71717A') }]}>Expense</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.typeButton, {
+                                            backgroundColor: newType === 'credit' ? '#10B981' : (isDarkMode ? '#27272A' : '#F4F4F5'),
+                                            flex: 1
+                                        }]}
+                                        onPress={() => setNewType('credit')}
+                                    >
+                                        <Text style={[styles.typeButtonText, { color: newType === 'credit' ? '#FFFFFF' : (isDarkMode ? '#A1A1AA' : '#71717A') }]}>Income</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+
+                            {/* Category Selector */}
+                            <View style={styles.inputGroup}>
+                                <Text style={[styles.inputLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>Category</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                                    {categories.map(cat => (
+                                        <TouchableOpacity
+                                            key={cat.id}
+                                            style={[styles.chip, {
+                                                backgroundColor: newCategory === cat.name ? '#8B5CF6' : (isDarkMode ? '#27272A' : '#F4F4F5')
+                                            }]}
+                                            onPress={() => setNewCategory(cat.name)}
+                                        >
+                                            <Text style={{ color: newCategory === cat.name ? '#FFFFFF' : (isDarkMode ? '#A1A1AA' : '#71717A'), fontSize: 12, fontWeight: '600' }}>
+                                                {cat.name}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+                            </View>
+
+                            {/* Notes Input */}
+                            <View style={styles.inputGroup}>
+                                <Text style={[styles.inputLabel, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>Notes</Text>
+                                <TextInput
+                                    style={[styles.input, {
+                                        backgroundColor: isDarkMode ? '#27272A' : '#F4F4F5',
+                                        color: isDarkMode ? '#FFFFFF' : '#1A1A1D',
+                                        borderColor: isDarkMode ? '#3F3F46' : '#E4E4E7'
+                                    }]}
+                                    placeholder="e.g. Lunch with friends"
+                                    placeholderTextColor={isDarkMode ? '#71717A' : '#A1A1AA'}
+                                    value={newNotes}
+                                    onChangeText={setNewNotes}
+                                />
+                            </View>
+
+                            <TouchableOpacity
+                                style={[styles.saveButton, { opacity: isSubmitting ? 0.7 : 1 }]}
+                                onPress={handleAddTransaction}
+                                disabled={isSubmitting}
+                            >
+                                <LinearGradient
+                                    colors={['#8B5CF6', '#7C3AED']}
+                                    style={styles.saveButtonGradient}
+                                >
+                                    {isSubmitting ? (
+                                        <ActivityIndicator color="#FFFFFF" />
+                                    ) : (
+                                        <Text style={styles.saveButtonText}>Add Transaction</Text>
+                                    )}
+                                </LinearGradient>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+                </KeyboardAvoidingView>
             </Modal>
         </SafeAreaView>
     );
@@ -1212,6 +1408,55 @@ const styles = StyleSheet.create({
     },
     checkmark: {
         marginLeft: 8,
+    },
+    // New Styles for Add Modal
+    inputGroup: {
+        marginBottom: 20,
+    },
+    inputLabel: {
+        fontSize: 13,
+        fontWeight: '700',
+        marginBottom: 8,
+        letterSpacing: 0.3,
+    },
+    input: {
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        borderRadius: 16,
+        fontSize: 15,
+        fontWeight: '600',
+        borderWidth: 1,
+    },
+    typeButton: {
+        paddingVertical: 12,
+        borderRadius: 12,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    typeButtonText: {
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    chip: {
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 12,
+    },
+    saveButton: {
+        borderRadius: 16,
+        overflow: 'hidden',
+        marginTop: 12,
+        marginBottom: 20,
+    },
+    saveButtonGradient: {
+        paddingVertical: 16,
+        alignItems: 'center',
+    },
+    saveButtonText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#FFFFFF',
     },
 });
 

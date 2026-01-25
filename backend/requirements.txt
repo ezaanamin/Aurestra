@@ -19,3 +19,7 @@ google-auth-oauthlib
 google-auth
 psycopg2-binary
 Flask-APScheduler
+pandas
+pymysql
+beautifulsoup4
+lxml

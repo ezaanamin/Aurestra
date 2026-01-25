@@ -24,6 +24,7 @@ const CategoryManagementScreen = ({ navigation }) => {
     const [newCatName, setNewCatName] = useState('');
     const [selectedIcon, setSelectedIcon] = useState('cash');
     const [catType, setCatType] = useState('spending'); // 'spending' or 'income'
+    const [isAdding, setIsAdding] = useState(false);
 
     const icons = [
         // Spending / General
@@ -55,15 +56,22 @@ const CategoryManagementScreen = ({ navigation }) => {
             Alert.alert('Error', 'Please enter a category name');
             return;
         }
-        await dispatch(addCategory({
-            name: newCatName,
-            icon: selectedIcon,
-            cat_type: catType
-        }));
-        setNewCatName('');
-        setSelectedIcon('cash');
-        setCatType('spending');
-        setModalVisible(false);
+        setIsAdding(true);
+        try {
+            await dispatch(addCategory({
+                name: newCatName,
+                icon: selectedIcon,
+                cat_type: catType
+            }));
+            setNewCatName('');
+            setSelectedIcon('cash');
+            setCatType('spending');
+            setModalVisible(false);
+        } catch (error) {
+            Alert.alert('Error', 'Could not add category');
+        } finally {
+            setIsAdding(false);
+        }
     };
 
     const handleDelete = (id, name, isDefault) => {
@@ -142,9 +150,10 @@ const CategoryManagementScreen = ({ navigation }) => {
                     <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
                         <Text style={[styles.modalTitle, { color: colors.text }]}>Add Category</Text>
 
+                        <Text style={[styles.sectionTitle, { color: colors.text }]}>Category Name</Text>
                         <TextInput
                             style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                            placeholder="Category Name"
+                            placeholder="e.g. Groceries"
                             placeholderTextColor={colors.textSecondary}
                             value={newCatName}
                             onChangeText={setNewCatName}
@@ -172,36 +181,51 @@ const CategoryManagementScreen = ({ navigation }) => {
                         </View>
 
                         <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Icon</Text>
-                        <FlatList
-                            data={icons}
-                            numColumns={6}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity
-                                    style={[
-                                        styles.iconOption,
-                                        { borderColor: selectedIcon === item ? colors.primary : colors.border }
-                                    ]}
-                                    onPress={() => setSelectedIcon(item)}
-                                >
-                                    <Icon name={item} size={24} color={colors.text} />
-                                </TouchableOpacity>
-                            )}
-                            keyExtractor={(item) => item}
-                            contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
-                        />
+                        <View style={{ height: 250, marginBottom: 20 }}>
+                            <FlatList
+                                data={icons}
+                                numColumns={6}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.iconOption,
+                                            { borderColor: selectedIcon === item ? colors.primary : colors.border }
+                                        ]}
+                                        onPress={() => setSelectedIcon(item)}
+                                    >
+                                        <Icon name={item} size={24} color={colors.text} />
+                                    </TouchableOpacity>
+                                )}
+                                keyExtractor={(item) => item}
+                                contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+                            />
+                        </View>
 
                         <View style={styles.modalButtons}>
                             <TouchableOpacity style={styles.cancelButton} onPress={() => setModalVisible(false)}>
                                 <Text style={styles.cancelButtonText}>Cancel</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.saveButton} onPress={handleCreate}>
-                                <Text style={styles.saveButtonText}>Add</Text>
+                            <TouchableOpacity style={styles.saveButton} onPress={handleCreate} disabled={isAdding}>
+                                {isAdding ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <Text style={styles.saveButtonText}>Add</Text>
+                                )}
                             </TouchableOpacity>
                         </View>
                     </View>
                 </View>
-            </Modal >
-        </SafeAreaView >
+            </Modal>
+
+            {/* Floating Action Button */}
+            <TouchableOpacity
+                style={[styles.fab, { backgroundColor: colors.primary }]}
+                onPress={() => setModalVisible(true)}
+                activeOpacity={0.8}
+            >
+                <Icon name="plus" size={32} color="#FFFFFF" />
+            </TouchableOpacity>
+        </SafeAreaView>
     );
 };
 
@@ -314,6 +338,21 @@ const styles = StyleSheet.create({
         backgroundColor: '#3B82F6',
     },
     saveButtonText: { fontWeight: 'bold', color: '#FFFFFF' },
+    fab: {
+        position: 'absolute',
+        bottom: 24,
+        right: 24,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 6,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.27,
+        shadowRadius: 4.65,
+    },
 });
 
 export default CategoryManagementScreen;

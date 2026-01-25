@@ -4,3 +4,5 @@ reproduce_issue.py
 reproduce_merger.py
 backend/check_env.py
 backend/fix_db_access.sh
+Aurestra/API_URL.js
+*.apk

@@ -12,6 +12,7 @@ import {
   Platform,
   ScrollView,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
@@ -273,7 +274,7 @@ const LoginScreen = ({ navigation }) => {
                 ]}>
                   {authStatus === 'loading' ? (
                     <View style={styles.loadingContainer}>
-                      <Icon name="loading" size={20} color="#1F2937" />
+                      <ActivityIndicator size="small" color="#1F2937" />
                       <Text style={styles.googleButtonText}>Authenticating...</Text>
                     </View>
                   ) : (
@@ -414,11 +415,11 @@ const LoginScreen = ({ navigation }) => {
                 colors={timer === 0 ? ['#94A3B8', '#94A3B8'] : ['#10B981', '#059669']}
                 style={styles.verifyGradient}
               >
-                <Icon
-                  name={authStatus === 'loading' ? "loading" : "check-circle"}
-                  size={18}
-                  color="#FFFFFF"
-                />
+                {authStatus === 'loading' ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Icon name="check-circle" size={18} color="#FFFFFF" />
+                )}
                 <Text style={styles.verifyText}>
                   {authStatus === 'loading' ? 'Verifying...' : 'Verify & Continue'}
                 </Text>

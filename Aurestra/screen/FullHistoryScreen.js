@@ -8,7 +8,8 @@ import {
     FlatList,
     TouchableOpacity,
     ActivityIndicator,
-    TextInput
+    TextInput,
+    Modal
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import Ionicons from 'react-native-vector-icons/Ionicons'; // Switched to Ionicons
@@ -23,6 +24,8 @@ const FullHistoryScreen = ({ navigation }) => {
     const [data, setData] = useState([]);
     const [filteredData, setFilteredData] = useState([]);
     const [searchText, setSearchText] = useState('');
+    const [sortMenuVisible, setSortMenuVisible] = useState(false);
+    const [sortBy, setSortBy] = useState('date_desc'); // date_desc, date_asc, amount_desc, amount_asc
 
     // Edit specific state
     const [selectedTransaction, setSelectedTransaction] = useState(null);
@@ -49,10 +52,32 @@ const FullHistoryScreen = ({ navigation }) => {
         }
     };
 
+    const handleSort = (sortType) => {
+        setSortBy(sortType);
+        let sorted = [...filteredData];
+        switch (sortType) {
+            case 'date_desc':
+                sorted.sort((a, b) => new Date(b.date) - new Date(a.date));
+                break;
+            case 'date_asc':
+                sorted.sort((a, b) => new Date(a.date) - new Date(b.date));
+                break;
+            case 'amount_desc':
+                sorted.sort((a, b) => b.amount - a.amount);
+                break;
+            case 'amount_asc':
+                sorted.sort((a, b) => a.amount - b.amount);
+                break;
+        }
+        setFilteredData(sorted);
+        setSortMenuVisible(false);
+    };
+
     const handleSearch = (text) => {
         setSearchText(text);
         if (!text) {
             setFilteredData(data);
+            handleSort(sortBy); // Re-apply sort
             return;
         }
         const lower = text.toLowerCase();
@@ -61,7 +86,15 @@ const FullHistoryScreen = ({ navigation }) => {
             (item.sender && item.sender.toLowerCase().includes(lower)) ||
             (String(item.amount).includes(lower))
         );
-        setFilteredData(filtered);
+        // Apply sort to filtered
+        let sorted = [...filtered];
+        // Re-use logic or just rely on next render if we extracted it, but inline for now:
+        if (sortBy === 'date_desc') sorted.sort((a, b) => new Date(b.date) - new Date(a.date));
+        if (sortBy === 'date_asc') sorted.sort((a, b) => new Date(a.date) - new Date(b.date));
+        if (sortBy === 'amount_desc') sorted.sort((a, b) => b.amount - a.amount);
+        if (sortBy === 'amount_asc') sorted.sort((a, b) => a.amount - b.amount);
+
+        setFilteredData(sorted);
     };
 
     const handleEdit = (item) => {
@@ -145,7 +178,7 @@ const FullHistoryScreen = ({ navigation }) => {
                     </TouchableOpacity>
                 </View>
 
-                {/* Search Bar */}
+                {/* Search and Sort */}
                 <View style={[styles.searchContainer, { backgroundColor: colors.card }]}>
                     <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
                     <TextInput
@@ -155,6 +188,9 @@ const FullHistoryScreen = ({ navigation }) => {
                         value={searchText}
                         onChangeText={handleSearch}
                     />
+                    <TouchableOpacity onPress={() => setSortMenuVisible(true)}>
+                        <Ionicons name="filter" size={20} color={colors.primary} />
+                    </TouchableOpacity>
                 </View>
             </LinearGradient>
 
@@ -173,6 +209,52 @@ const FullHistoryScreen = ({ navigation }) => {
                         }
                     />
                 )}
+
+                {/* Sort Modal */}
+                <Modal
+                    visible={sortMenuVisible}
+                    transparent={true}
+                    animationType="fade"
+                    onRequestClose={() => setSortMenuVisible(false)}
+                >
+                    <TouchableOpacity
+                        style={styles.modalOverlay}
+                        activeOpacity={1}
+                        onPress={() => setSortMenuVisible(false)}
+                    >
+                        <View style={[styles.sortModalContent, { backgroundColor: colors.card }]}>
+                            <Text style={[styles.sortTitle, { color: colors.text }]}>Sort Transactions</Text>
+
+                            {[
+                                { label: 'Newest First', value: 'date_desc', icon: 'calendar' },
+                                { label: 'Oldest First', value: 'date_asc', icon: 'calendar-outline' },
+                                { label: 'Highest Amount', value: 'amount_desc', icon: 'trending-up' },
+                                { label: 'Lowest Amount', value: 'amount_asc', icon: 'trending-down' }
+                            ].map((option) => (
+                                <TouchableOpacity
+                                    key={option.value}
+                                    style={[
+                                        styles.sortOption,
+                                        sortBy === option.value && { backgroundColor: colors.primary + '20' }
+                                    ]}
+                                    onPress={() => handleSort(option.value)}
+                                >
+                                    <Ionicons name={option.icon} size={20} color={colors.text} style={{ marginRight: 12 }} />
+                                    <Text style={[
+                                        styles.sortOptionText,
+                                        { color: colors.text },
+                                        sortBy === option.value && { color: colors.primary, fontWeight: 'bold' }
+                                    ]}>
+                                        {option.label}
+                                    </Text>
+                                    {sortBy === option.value && (
+                                        <Ionicons name="checkmark" size={20} color={colors.primary} style={{ marginLeft: 'auto' }} />
+                                    )}
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
 
                 {/* Statement Modal */}
                 <StatementModal
@@ -275,6 +357,34 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: 'bold',
     },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    sortModalContent: {
+        width: '80%',
+        borderRadius: 16,
+        padding: 20,
+        elevation: 5,
+    },
+    sortTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        marginBottom: 16,
+        textAlign: 'center'
+    },
+    sortOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(0,0,0,0.05)',
+    },
+    sortOptionText: {
+        fontSize: 16,
+    }
 });
 
 export default FullHistoryScreen;

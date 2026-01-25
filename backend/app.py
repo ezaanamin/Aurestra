@@ -51,6 +51,51 @@ SMTP_EMAIL = os.getenv('SMTP_EMAIL')
 SMTP_PASSWORD = os.getenv("WALLET_APP_PASSWORD") or os.getenv("wallet_APP_PASSWORD") or os.getenv("APP_PASSWORD") or os.getenv("OPTP_APP_PASSWORD") 
 
 # -------------------------
+# HEALTH CHECK ROUTES
+# -------------------------
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Simple backend liveness probe"""
+    return jsonify({
+        "status": "online",
+        "message": "Backend is running",
+        "timestamp": datetime.now().isoformat()
+    }), 200
+
+@app.route('/api/health/db', methods=['GET'])
+def db_health_check():
+    """Deep database connectivity and schema check"""
+    try:
+        from sqlalchemy import inspect
+        
+        # 1. Check Connection
+        db.session.execute(func.now()).scalar()
+        
+        # 2. Check Tables
+        inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
+        
+        required_tables = ['users', 'transactions', 'categories', 'budgets']
+        missing_tables = [t for t in required_tables if t not in existing_tables]
+        
+        status = "healthy" if not missing_tables else "degraded"
+        
+        return jsonify({
+            "status": status,
+            "database": "connected",
+            "tables_found": len(existing_tables),
+            "missing_required_tables": missing_tables,
+            "all_tables": existing_tables
+        }), 200 if status == "healthy" else 503
+        
+    except Exception as e:
+        print(f"❌ DB Health Check Failed: {e}")
+        return jsonify({
+            "status": "offline",
+            "error": str(e)
+        }), 500
+
+# -------------------------
 # UTILS
 # -------------------------
 def token_required(f):
@@ -72,6 +117,7 @@ def token_required(f):
             # print(f"🔍 [Auth] Token Decoded. User ID: {user_id}")
             
             with app.app_context():
+                print(f"🔍 [Auth] Looking up User ID: {user_id}")
                 current_user = User.query.get(user_id)
                 
             if not current_user:
@@ -273,22 +319,17 @@ def home():
 def login():
     data = request.get_json()
     email = data.get('email')
-    password = data.get('password') 
+    # Updated Flow: Email ONLY -> OTP
+    # No password check here as per user request (Passwordless/OTP-only)
     
     user = User.query.filter_by(email=email).first()
     
     if not user:
-        user = User(email=email, password_hash=password, full_name="Ezaan Amin")
-        db.session.add(user)
-        db.session.commit()
-    else:
-        # DEBUG LOGS (Removed for deployment)
-        # print(f"DEBUG LOGIN: Request for {email}")
-        # print(f"DEBUG LOGIN: Input Pass: '{password}'")
-        # print(f"DEBUG LOGIN: Stored Pass: '{user.password_hash}'")
-
-        if user.password_hash != password:
-             return jsonify({'message': 'Invalid credentials'}), 401
+        # Prevent auto-creation for security, or keep it? 
+        # User said "user shouldn't have any password". 
+        # Usually this implies they just type email and get OTP.
+        # But we must ensure the user exists.
+        return jsonify({'message': 'User not found'}), 404
 
     # Generate Real Random OTP (Secure)
     # Using secrets for cryptographic randomness
@@ -338,7 +379,6 @@ def google_login():
             user = User(
                 email=email,
                 full_name=name,
-                password_hash="GOOGLE_AUTH", # Placeholder
                 google_id=google_id,
                 google_email=email,
                 avatar_url=picture # Save Avatar
@@ -347,16 +387,21 @@ def google_login():
             db.session.commit()
         else:
             # Update existing user
+            # Strict Security: Only link if Google ID is missing (seeded user)
             if not user.google_id:
+                print(f"🔗 [AUTH] First-time linking Google ID for {email}")
                 user.google_id = google_id
                 user.google_email = email
+            elif user.google_id != google_id:
+                # Security Risk: Trying to login with a different Google account for same email
+                print(f"🚨 [AUTH] Google ID Mismatch for {email}. Existing: {user.google_id}, New: {google_id}")
+                return jsonify({"message": "Security Error: Account linked to a different Google ID."}), 403
             
-            # Always update avatar if available and different?
-            # Or just if missing? Let's override to keep it fresh from Google.
+            # Always keep avatar fresh from Google if available
             if picture:
                 user.avatar_url = picture
                 
-            # Update name if missing
+            # Update name if missing or if we want to sync
             if name and not user.full_name:
                 user.full_name = name
                 
@@ -438,15 +483,19 @@ def verify_otp():
     email = data.get('email')
     otp = data.get('otp')
     
+    print(f"🔒 [OTP] Verifying for email: {email} with OTP: {otp}")
     user = User.query.filter_by(email=email).first()
     
     if not user:
+        print(f"❌ [OTP] User not found for email: {email}")
         return jsonify({'message': 'User not found'}), 404
         
     if user.otp_code != otp:
+        print(f"❌ [OTP] Mismatch! Expected: {user.otp_code}, Got: {otp}")
         return jsonify({'message': 'Invalid OTP'}), 400
         
-    if datetime.utcnow() > user.otp_expiry:
+    if user.otp_expiry and datetime.utcnow() > user.otp_expiry:
+        print(f"❌ [OTP] Expired! Expiry: {user.otp_expiry}, Now: {datetime.utcnow()}")
         return jsonify({'message': 'OTP expired'}), 400
         
     # Generate JWT
@@ -1452,6 +1501,8 @@ def test_sms_parsing():
 @app.route("/api/sms/batch", methods=["POST"])
 def process_batch_sms():
     """Process multiple SMS messages"""
+    from financial_agent import FinancialAgent # Import here to avoid circular imports if any
+    
     try:
         if not rate_limit_check('sms_batch', 5, 60):
             return jsonify({"error": "Rate limit exceeded"}), 429
@@ -1478,6 +1529,8 @@ def process_batch_sms():
             'errors': []
         }
         
+        affected_months = set()
+        
         for idx, msg_data in enumerate(messages):
             try:
                 message = msg_data.get('message')
@@ -1498,6 +1551,8 @@ def process_batch_sms():
                 if transaction:
                     if is_new:
                         results['created'] += 1
+                        # Track affected month for Insight Regeneration
+                        affected_months.add((transaction.date.year, transaction.date.month))
                     else:
                         results['skipped'] += 1
                         
@@ -1515,7 +1570,7 @@ def process_batch_sms():
                     results['errors'].append({
                         'index': idx, 
                         'error': error_msg, 
-                        'message': message  # Include the failing message in the response
+                        'message': message
                     })
                     
             except Exception as e:
@@ -1523,6 +1578,16 @@ def process_batch_sms():
                 results['errors'].append({'index': idx, 'error': str(e)})
         
         print(f"✅ Batch: {results['created']} created, {results['skipped']} skipped, {results['failed']} failed")
+        
+        # --- Trigger Insight Regeneration ---
+        if affected_months:
+            print(f"🔄 Regenerating Insights for {len(affected_months)} months: {affected_months}")
+            agent = FinancialAgent()
+            for year, month in affected_months:
+                try:
+                    agent.analyze_month(year, month)
+                except Exception as e:
+                    print(f"⚠️ Failed to analyze {year}-{month}: {e}")
         
         return jsonify(results), 200
         
@@ -2527,6 +2592,63 @@ def mark_statement_as_read(current_user):
         "reviewed_at": stmt.reviewed_at.isoformat()
     })
 
+
+@app.route("/api/transactions", methods=["POST"])
+@token_required
+def create_transaction(current_user):
+    try:
+        data = request.get_json()
+        
+        amount = float(data.get('amount', 0))
+        if amount <= 0:
+            return jsonify({"error": "Amount must be positive"}), 400
+            
+        t_type = data.get('type', 'debit') # 'debit' or 'credit'
+        purpose = data.get('category', 'Uncategorized')
+        notes = data.get('notes', '')
+        date_str = data.get('date')
+        
+        tx_date = datetime.utcnow()
+        if date_str:
+            try:
+                # Expecting YYYY-MM-DD
+                tx_date = datetime.strptime(date_str, "%Y-%m-%d")
+            except:
+                pass
+
+        new_tx = Transaction(
+            source='manual',
+            date=tx_date,
+            amount=amount,
+            type=t_type,
+            purpose=purpose,
+            sender='Manual Entry',
+            receiver='Me' if t_type == 'credit' else 'Merchant',
+            notes=notes,
+            categorization_status='confirmed'
+        )
+        
+        db.session.add(new_tx)
+        
+        # Optional: update account balance logic here if needed
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Transaction added successfully",
+            "transaction": {
+                "id": new_tx.id,
+                "amount": new_tx.amount,
+                "purpose": new_tx.purpose,
+                "date": new_tx.date.strftime("%Y-%m-%d"),
+                "type": new_tx.type
+            }
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
 # --- Scheduler & Backup ---
 from flask_apscheduler import APScheduler
 from backup_manager import BackupManager
@@ -2552,10 +2674,31 @@ with app.app_context():
     
     # Init Scheduler (only if not already running to avoid double-init on reloads)
     if not scheduler.running:
-        scheduler.add_job(id='daily_backup', func=scheduled_backup_job, trigger='cron', hour=3, minute=0)
+        # Schedule Daily Backup at 12:00 AM (Midnight)
+        scheduler.add_job(id='daily_backup', func=scheduled_backup_job, trigger='cron', hour=0, minute=0)
         scheduler.init_app(app)
         scheduler.start()
-        print("⏰ [System] Backup Scheduler Started")
+        print("⏰ [System] Backup Scheduler Started (Daily @ 00:00)")
+
+@app.route("/api/backup/trigger", methods=["POST"])
+@token_required
+def trigger_manual_backup(current_user):
+    """Manually trigger the backup process"""
+    try:
+        # Run asynchronously in a real app, but for now synchronous is okay or use thread
+        # Using a thread to avoid blocking response
+        import threading
+        
+        def run_backup():
+            with app.app_context():
+                backup_manager.perform_backup()
+                
+        thread = threading.Thread(target=run_backup)
+        thread.start()
+        
+        return jsonify({"message": "Backup started in background"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # Use 0.0.0.0 to allow access from other devices/emulator
