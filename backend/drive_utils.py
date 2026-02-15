@@ -7,9 +7,14 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from datetime import datetime
 from cryptography.fernet import Fernet
+import base64
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # SCOPES must match what we requested in frontend
+# SCOPES must match what we requested in frontend
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'encryption_key.key')
 
@@ -260,3 +265,56 @@ def upload_file_from_path(service, folder_id, filename, filepath, mimetype='appl
     except Exception as e:
         print(f"❌ Upload File error: {e}")
         return False
+
+def get_gmail_service(user):
+    """
+    Returns an authenticated Gmail API service for the given User.
+    """
+    if not user.google_refresh_token:
+        # print(f"⚠️ User {user.email} has no refresh token.")
+        return None
+
+    try:
+        creds = Credentials(
+            token=None,
+            refresh_token=user.google_refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=os.getenv('GOOGLE_WEB_CLIENT_ID'),
+            client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+            scopes=GMAIL_SCOPES
+        )
+
+        creds.refresh(Request())
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+
+    except Exception as e:
+        print(f"❌ Failed to build Gmail service: {e}")
+        return None
+
+def create_message(sender, to, subject, message_text, message_html=None):
+    """Create a message for an email."""
+    message = MIMEMultipart('alternative')
+    message['to'] = to
+    message['from'] = sender
+    message['subject'] = subject
+
+    part1 = MIMEText(message_text, 'plain')
+    message.attach(part1)
+
+    if message_html:
+        part2 = MIMEText(message_html, 'html')
+        message.attach(part2)
+
+    return {'raw': base64.urlsafe_b64encode(message.as_bytes()).decode()}
+
+def send_gmail_message(service, user_id, message):
+    """Send an email message."""
+    try:
+        message = (service.users().messages().send(userId=user_id, body=message)
+                   .execute())
+        # print('Message Id: %s' % message['id'])
+        return message
+    except Exception as error:
+        print(f'❌ An error occurred sending email: {error}')
+        return None

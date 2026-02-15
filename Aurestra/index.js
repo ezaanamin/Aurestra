@@ -28,19 +28,8 @@ GoogleSignin.configure({
   scopes: [
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/drive.file'
-  ],
-});
-
-// Configure Google Sign-In
-GoogleSignin.configure({
-  webClientId: Config.GOOGLE_WEB_CLIENT_ID,
-  offlineAccess: true,
-  forceCodeForRefreshToken: true,
-  scopes: [
-    'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/drive.file'
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/gmail.send'
   ],
 });
 

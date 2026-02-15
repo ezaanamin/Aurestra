@@ -320,8 +320,8 @@ const ProfileScreen = ({ navigation }) => {
             { backgroundColor: isDarkMode ? '#27272A' : '#FFFFFF' }
           ]}
         >
-          <View style={[styles.menuIcon, { backgroundColor: item.color + '15' }]}>
-            <Icon name={item.icon} size={20} color={item.color} />
+          <View style={[styles.menuIcon, { backgroundColor: (item.color || '#64748B') + '15' }]}>
+            <Icon name={item.icon} size={20} color={item.color || '#64748B'} />
           </View>
           <View style={styles.menuTextContainer}>
             <Text style={[styles.menuLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
@@ -331,8 +331,8 @@ const ProfileScreen = ({ navigation }) => {
           <Switch
             value={item.value}
             onValueChange={item.setter}
-            trackColor={{ false: isDarkMode ? '#3F3F46' : '#E4E4E7', true: item.color + '40' }}
-            thumbColor={item.value ? item.color : '#FFFFFF'}
+            trackColor={{ false: isDarkMode ? '#3F3F46' : '#E4E4E7', true: (item.color || '#8B5CF6') + '40' }}
+            thumbColor={item.value ? (item.color || '#8B5CF6') : '#FFFFFF'}
             ios_backgroundColor={isDarkMode ? '#3F3F46' : '#E4E4E7'}
           />
         </View>
@@ -350,8 +350,8 @@ const ProfileScreen = ({ navigation }) => {
         onPress={() => item.action ? item.action() : (item.screen && navigation.navigate(item.screen))}
         activeOpacity={0.7}
       >
-        <View style={[styles.menuIcon, { backgroundColor: item.color + '15' }]}>
-          <Icon name={item.icon} size={20} color={item.color} />
+        <View style={[styles.menuIcon, { backgroundColor: (item.color || '#64748B') + '15' }]}>
+          <Icon name={item.icon} size={20} color={item.color || '#64748B'} />
         </View>
         <View style={styles.menuTextContainer}>
           <Text style={[styles.menuLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
@@ -471,8 +471,8 @@ const ProfileScreen = ({ navigation }) => {
                   }
                 ]}
               >
-                <View style={[styles.statIcon, { backgroundColor: stat.color + '15' }]}>
-                  <Icon name={stat.icon} size={22} color={stat.color} />
+                <View style={[styles.statIcon, { backgroundColor: (stat.color || '#64748B') + '15' }]}>
+                  <Icon name={stat.icon} size={22} color={stat.color || '#64748B'} />
                 </View>
                 <Text style={[styles.statValue, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
                   {stat.value}
@@ -501,8 +501,8 @@ const ProfileScreen = ({ navigation }) => {
                 onPress={() => action.screen && navigation.navigate(action.screen, action.params)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.quickActionIcon, { backgroundColor: action.color + '15' }]}>
-                  <Icon name={action.icon} size={20} color={action.color} />
+                <View style={[styles.quickActionIcon, { backgroundColor: (action.color || '#64748B') + '15' }]}>
+                  <Icon name={action.icon} size={20} color={action.color || '#64748B'} />
                 </View>
                 <Text style={[styles.quickActionLabel, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
                   {action.label}

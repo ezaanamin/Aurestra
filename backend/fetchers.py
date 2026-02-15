@@ -78,15 +78,14 @@ def fetch_latest_bank_email():
 
         # Get list of email IDs (latest are at the end)
         email_ids = data[0].split()
-        # Scan the last 3 emails to find the best account (e.g. Current instead of Digital)
-        # because the bank might send multiple emails for different accounts.
-        recent_ids = email_ids[-3:] if len(email_ids) > 3 else email_ids
         
-        best_result = None
-        max_balance = -1.0
+        all_transactions = []
+        all_email_data = []  # Store all processed emails with metadata
+        processed_count = 0
 
-        for e_id in reversed(recent_ids):
-            print(f"📧 processing email ID: {e_id}")
+        # Scan EARLIEST to LATEST to build the state
+        for e_id in email_ids:
+            print(f"📧 Processing email ID: {e_id}")
             try:
                 status, msg_data = mail.fetch(e_id, "(RFC822)")
                 if status != "OK": continue
@@ -104,13 +103,6 @@ def fetch_latest_bank_email():
                 except:
                     pass
 
-                current_result = {
-                    "from": BANK_SENDER, 
-                    "subject": subject, 
-                    "balances": {}, 
-                    "date": statement_date # Include Date
-                }
-                
                 # Extract PDF
                 extracted_text = None
                 if msg.is_multipart():
@@ -121,53 +113,65 @@ def fetch_latest_bank_email():
                             with open(path, "wb") as f:
                                 f.write(part.get_payload(decode=True))
                             
-                            # Extract Text
                             extracted_text = extract_text_from_pdf(path, BANK_PDF_PASSWORD)
-                            os.remove(path)
+                            if os.path.exists(path):
+                                os.remove(path)
                             if extracted_text:
-                                break # Found a PDF in this email
+                                break 
 
                 if extracted_text:
-                    # CHECK FOR BLOCKED/TARGET ACCOUNTS
+                    is_target = TARGET_ACCOUNT_NUMBER and TARGET_ACCOUNT_NUMBER in extracted_text
+                    
                     if IGNORE_ACCOUNT_NUMBER and IGNORE_ACCOUNT_NUMBER in extracted_text:
-                        print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                         if not is_target:
+                            print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                            continue
+
+                    if TARGET_ACCOUNT_NUMBER and not is_target:
+                        print(f"⏭️  Skipping non-target email.")
                         continue
                         
-                    is_target = False
-                    if TARGET_ACCOUNT_NUMBER and TARGET_ACCOUNT_NUMBER in extracted_text:
-                         print(f"🎯 Target Account {TARGET_ACCOUNT_NUMBER} FOUND!")
-                         is_target = True
-                         print(f"📄 TARGET PDF CONTENT:\n{extracted_text[:4000]}...")
-
-                    balances = extract_balances_from_bank(extracted_text)
-                    current_result["balances"] = balances
-                    
-                    # Extract Transactions
-                    transactions = extract_transactions_from_bank(extracted_text)
-                    current_result["transactions"] = transactions
-                    print(f"📝 Extracted {len(transactions)} transactions from {subject}")
-                    
-                    found_bal = safe_float(balances.get("closing_balance", "0"))
-                    print(f"💰 Found Balance: {found_bal} in {subject}")
-
-                    # REMOVED: Don't override PDF balance with calculated balance
-                    # The PDF balance from the bank is the source of truth
-                    # if transactions:
-                    #     calculated_closing = transactions[-1]["running_balance"]
-                    #     print(f"🔄 Correcting Closing Balance: {found_bal} -> {calculated_closing}")
-                    #     balances["closing_balance"] = str(calculated_closing)
-                    #     found_bal = calculated_closing
-                    
-                    # If this is our TARGET account, select it immediately and stop scanning
                     if is_target:
-                         max_balance = found_bal
-                         best_result = current_result
-                         break
+                        print(f"🎯 Target Account {TARGET_ACCOUNT_NUMBER} FOUND!")
+
+                    # ISOLATE ACCOUNT SECTION (Very Important for Multi-Account PDFs)
+                    target_text = extracted_text
+                    if TARGET_ACCOUNT_NUMBER:
+                        clean_text = re.sub(r'\s+', ' ', extracted_text)
+                        acct_pos = clean_text.find(TARGET_ACCOUNT_NUMBER)
+                        if acct_pos != -1:
+                            # Find the account section start in original text
+                            original_acct_pos = extracted_text.find(TARGET_ACCOUNT_NUMBER)
+                            target_text = extracted_text[original_acct_pos:]
+                            
+                            # Find end of section (next account or summary)
+                            next_ref = re.search(r'Account No\s*:\s*\d+|SUMMARY OF ALL ACCOUNTS', target_text[len(TARGET_ACCOUNT_NUMBER):])
+                            if next_ref:
+                                target_text = target_text[:len(TARGET_ACCOUNT_NUMBER) + next_ref.start()]
+                                print(f"✂️ Isolated section: {len(target_text)} chars")
+
+                    # PASS TARGET SECTION TO EXTRACTORS
+                    balances = extract_balances_from_bank(target_text, target_account=TARGET_ACCOUNT_NUMBER)
+                    transactions = extract_transactions_from_bank(target_text)
                     
-                    # Otherwise, keep looking for highest balance (fallback)
-                    if found_bal > max_balance:
-                        max_balance = found_bal
-                        best_result = current_result
+                    opening_bal = safe_float(balances.get("opening_balance", 0))
+                    closing_bal = safe_float(balances.get("closing_balance", 0))
+                    
+                    print(f"💰 Email {e_id} - Opening: {opening_bal}, Closing: {closing_bal}, Txs: {len(transactions)}")
+                    
+                    # Store email data with metadata
+                    all_email_data.append({
+                        'email_id': e_id,
+                        'date': statement_date,
+                        'opening_balance': opening_bal,
+                        'closing_balance': closing_bal,
+                        'transactions': transactions,
+                        'subject': subject
+                    })
+                    
+                    # Accumulate ALL Transactions
+                    all_transactions.extend(transactions)
+                    processed_count += 1
                         
             except Exception as inner_e:
                 print(f"⚠️ Error processing email {e_id}: {inner_e}")
@@ -175,14 +179,54 @@ def fetch_latest_bank_email():
 
         mail.logout()
 
-        if not best_result or not best_result["balances"]:
-             if max_balance == -1.0:
-                 return {"error": "Bank statements found but unable to extract valid balances."}
-             # If we processed emails but found 0.0, best_result is set (initially implicitly? No, need to handle empty)
-             return {"error": "No valid PDF balances found."}
+        if processed_count == 0:
+             return {"error": "No bank statements found in recent emails."}
 
-        print(f"🏆 Selected Statement with Balance: {max_balance}")
-        return best_result
+        # SORT emails by date to ensure correct order
+        all_email_data.sort(key=lambda x: x['date'])
+        
+        print(f"\n📊 BALANCE EXTRACTION SUMMARY:")
+        print(f"   Total emails processed: {processed_count}")
+        for idx, email_data in enumerate(all_email_data):
+            print(f"   Email {idx+1} ({email_data['date'].date()}): Open={email_data['opening_balance']}, Close={email_data['closing_balance']}")
+        
+        # CRITICAL FIX: Extract balances correctly
+        # Opening: First opening balance from EARLIEST email
+        first_opening = all_email_data[0]['opening_balance']
+        
+        # Closing: Must come from MONTH-END statement (30th or 31st)
+        # Find the email with date closest to month-end
+        last_closing = all_email_data[-1]['closing_balance']  # Default fallback
+        
+        # Try to find statement dated at month-end (28-31)
+        month_end_candidates = [
+            email_data for email_data in all_email_data 
+            if email_data['date'].day >= 28  # 28, 29, 30, or 31
+        ]
+        
+        if month_end_candidates:
+            # Use the LATEST month-end statement
+            month_end_statement = month_end_candidates[-1]
+            last_closing = month_end_statement['closing_balance']
+            print(f"\n🎯 Using MONTH-END statement from {month_end_statement['date'].date()} (day {month_end_statement['date'].day})")
+        else:
+            print(f"\n⚠️ No month-end statement found (days 28-31), using latest email")
+        
+        print(f"\n✅ FINAL BALANCES:")
+        print(f"   Opening (from earliest): {first_opening}")
+        print(f"   Closing (from latest): {last_closing}")
+
+        final_balances = {
+            "opening_balance": first_opening,
+            "closing_balance": last_closing
+        }
+
+        return {
+            "balances": final_balances,
+            "transactions": all_transactions,
+            "count": len(all_transactions),
+            "emails_processed": processed_count
+        }
 
     except Exception as e:
         return {"error": f"Bank email fetch error: {str(e)}"}
@@ -233,18 +277,6 @@ def fetch_latest_wallet_email():
 
     except Exception as e:
         return {"error": f"Wallet email fetch error: {str(e)}"}
-def clean(text):
-    if not text:
-        return None
-    return text.replace("\xa0", " ").strip()
-
-def decode_mime_words(s):
-    """Decode MIME-encoded email headers."""
-    decoded = decode_header(s)
-    return ''.join(
-        str(t[0], t[1] or 'utf-8') if isinstance(t[0], bytes) else t[0]
-        for t in decoded
-    )
 
 def parse_amount(amount_str):
     """Convert amount string like 'Rs. 6,700.00' to float 6700.0"""
@@ -512,12 +544,12 @@ def fetch_previous_month_statement(reference_date=None):
         email_ids = data[0].split()
         print(f"📨 Found {len(email_ids)} candidate emails. Filtering for [{limit_start_date.date()} - {limit_end_date.date()}]...")
         
-        # We will iterate reversed to get latest valid one first
-        candidates = reversed(email_ids)
+        # Store all valid emails with metadata
+        all_email_data = []
+        merged_transactions = []
+        month_name = last_month.strftime("%B %Y")
         
-        best_result = None
-        
-        for e_id in candidates:
+        for e_id in email_ids:
             try:
                 # 1. HEADER FETCH & FILTER
                 # ------------------------
@@ -552,7 +584,6 @@ def fetch_previous_month_statement(reference_date=None):
                 if status != "OK": continue
                 
                 msg = email.message_from_bytes(msg_data[0][1])
-                subject = subj
                 
                 # Check Attachment
                 extracted_text = None
@@ -571,20 +602,58 @@ def fetch_previous_month_statement(reference_date=None):
                                 break 
 
                 if extracted_text:
+                    is_target = TARGET_ACCOUNT_NUMBER and TARGET_ACCOUNT_NUMBER in extracted_text
+                    
                     if IGNORE_ACCOUNT_NUMBER and IGNORE_ACCOUNT_NUMBER in extracted_text:
-                        print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                         if not is_target:
+                            print(f"🚫 Ignoring Statement for Account ending in {IGNORE_ACCOUNT_NUMBER}")
+                            continue
+
+                    if TARGET_ACCOUNT_NUMBER and not is_target:
+                        print(f"⏭️  Skipping email - Target Account {TARGET_ACCOUNT_NUMBER} not found.")
                         continue
                     
-                    balances = extract_balances_from_bank(extracted_text)
-                    transactions = extract_transactions_from_bank(extracted_text)
+                    print(f"🎯 Target Account {TARGET_ACCOUNT_NUMBER} confirmed in email.")
                     
-                    best_result = {
-                        "balances": balances,
-                        "transactions": transactions,
-                        "month_name": last_month.strftime("%B %Y"),
-                        "raw_count": len(transactions)
-                    }
-                    break # Found valid PDF! Stop searching.
+                    # ISOLATE ACCOUNT SECTION (Very Important for Multi-Account PDFs)
+                    target_text = extracted_text
+                    if TARGET_ACCOUNT_NUMBER:
+                        clean_text = re.sub(r'\s+', ' ', extracted_text)
+                        acct_pos = clean_text.find(TARGET_ACCOUNT_NUMBER)
+                        if acct_pos != -1:
+                            # Find the account section start in original text
+                            original_acct_pos = extracted_text.find(TARGET_ACCOUNT_NUMBER)
+                            target_text = extracted_text[original_acct_pos:]
+                            
+                            # Find end of section (next account or summary)
+                            next_ref = re.search(r'Account No\s*:\s*\d+|SUMMARY OF ALL ACCOUNTS', target_text[len(TARGET_ACCOUNT_NUMBER):])
+                            if next_ref:
+                                target_text = target_text[:len(TARGET_ACCOUNT_NUMBER) + next_ref.start()]
+                                print(f"✂️ Isolated section: {len(target_text)} chars")
+
+                    balances = extract_balances_from_bank(target_text, target_account=TARGET_ACCOUNT_NUMBER)
+                    transactions = extract_transactions_from_bank(target_text)
+                    
+                    opening_bal = safe_float(balances.get("opening_balance", 0))
+                    closing_bal = safe_float(balances.get("closing_balance", 0))
+                    
+                    print(f"💰 Email {e_id} - Opening: {opening_bal}, Closing: {closing_bal}, Txs: {len(transactions)}")
+                    
+                    # Store email data
+                    all_email_data.append({
+                        'email_id': e_id,
+                        'date': email_dt,
+                        'opening_balance': opening_bal,
+                        'closing_balance': closing_bal,
+                        'all_closing_balances': balances.get("all_closing_balances", []),
+                        'balance_table': balances.get("balance_table", []),
+                        'transactions': transactions,
+                        'subject': subj
+                    })
+                    
+                    # Accumulate ALL transactions
+                    merged_transactions.extend(transactions)
+                    print(f"➕ Merged {len(transactions)} txs. Total: {len(merged_transactions)}")
             
             except Exception as inner:
                 print(f"Error reading email {e_id}: {inner}")
@@ -592,10 +661,68 @@ def fetch_previous_month_statement(reference_date=None):
         
         mail.logout()
         
-        if not best_result:
-            return {"error": "Could not find a valid PDF statement for previous month."}
+        if len(all_email_data) == 0:
+            return {"error": f"No valid bank statement PDFs found for {month_name}"}
+        
+        # SORT emails by date to ensure correct order
+        all_email_data.sort(key=lambda x: x['date'])
+        
+        print(f"\n📊 BALANCE EXTRACTION SUMMARY for {month_name}:")
+        print(f"   Total emails processed: {len(all_email_data)}")
+        for idx, email_data in enumerate(all_email_data):
+            print(f"   Email {idx+1} ({email_data['date'].date()}): Open={email_data['opening_balance']}, Close={email_data['closing_balance']}")
+        
+        # CRITICAL FIX: Extract balances correctly
+        # Opening: First opening balance from EARLIEST email
+        first_opening = all_email_data[0]['opening_balance']
+        
+        # Closing: Must come from MONTH-END statement (30th or 31st)
+        # For the target month, find statement dated at month-end
+        last_closing = all_email_data[-1]['closing_balance']  # Default fallback
+        
+        # Calculate the last day of the target month
+        target_month = last_month.month
+        target_year = last_month.year
+        
+        # Try to find statement dated at month-end (28-31)
+        month_end_candidates = [
+            email_data for email_data in all_email_data 
+            if email_data['date'].month == target_month 
+            and email_data['date'].year == target_year
+            and email_data['date'].day >= 28  # 28, 29, 30, or 31
+        ]
+        
+        if month_end_candidates:
+            # Use the LATEST month-end statement for the target month
+            month_end_statement = month_end_candidates[-1]
+            last_closing = month_end_statement['closing_balance']
+            print(f"\n🎯 Using MONTH-END statement from {month_end_statement['date'].date()} (day {month_end_statement['date'].day})")
+        else:
+            print(f"\n⚠️ No month-end statement found (days 28-31) for {month_name}, using latest email")
+        
+        print(f"\n✅ FINAL BALANCES:")
+        print(f"   Opening (from earliest): {first_opening}")
+        print(f"   Closing (from latest): {last_closing}")
+        
+        final_balances = {
+            "opening_balance": first_opening,
+            "closing_balance": last_closing
+        }
             
-        return best_result
+        return {
+            "balances": final_balances,
+            "transactions": merged_transactions,
+            "month_name": month_name,
+            "raw_count": len(merged_transactions),
+            "email_count": len(all_email_data),
+            "all_email_data": [{
+                "date": e["date"].isoformat(),
+                "opening_balance": e["opening_balance"],
+                "closing_balance": e["closing_balance"],
+                "all_closing_balances": e["all_closing_balances"],
+                "balance_table": e["balance_table"]
+            } for e in all_email_data]
+        }
 
     except Exception as e:
         return {"error": f"IMAP Error: {str(e)}"}

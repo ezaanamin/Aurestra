@@ -400,7 +400,7 @@ const CategoryScreen = ({ navigation }) => {
             {/* Decorative elements */}
             <View style={[styles.decorCircle, styles.decorCircle1]} />
             <View style={[styles.decorCircle, styles.decorCircle2]} />
-            
+
             <View style={styles.wealthContent}>
               <View style={styles.wealthHeader}>
                 <View style={styles.wealthIconContainer}>
@@ -410,7 +410,7 @@ const CategoryScreen = ({ navigation }) => {
               </View>
 
               <Text style={styles.wealthAmount}>{formatCurrency(grossBalance)}</Text>
-              
+
               <View style={styles.wealthStats}>
                 <View style={styles.wealthStat}>
                   <View style={styles.wealthStatDot} />
@@ -419,9 +419,9 @@ const CategoryScreen = ({ navigation }) => {
                     <Text style={styles.wealthStatValue}>{formatCurrency(availableSavings)}</Text>
                   </View>
                 </View>
-                
+
                 <View style={styles.wealthStatDivider} />
-                
+
                 <View style={styles.wealthStat}>
                   <View style={[styles.wealthStatDot, { backgroundColor: '#FBBF24' }]} />
                   <View>
@@ -732,8 +732,8 @@ const CategoryScreen = ({ navigation }) => {
                       borderColor: isDarkMode ? '#27272A' : '#E4E4E7'
                     }]}
                   >
-                    <View style={[styles.categoryIcon, { backgroundColor: details.color + '20' }]}>
-                      <Icon name={details.icon} size={28} color={details.color} />
+                    <View style={[styles.categoryIcon, { backgroundColor: (details.color || '#64748B') + '20' }]}>
+                      <Icon name={details.icon} size={28} color={details.color || '#64748B'} />
                     </View>
                     <Text style={[styles.categoryName, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]} numberOfLines={1}>
                       {cat.category}
@@ -788,7 +788,7 @@ const CategoryScreen = ({ navigation }) => {
             backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF'
           }]}>
             <View style={styles.modalHandle} />
-            
+
             <View style={styles.modalHeader}>
               <View>
                 <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
@@ -972,7 +972,7 @@ const CategoryScreen = ({ navigation }) => {
             backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF'
           }]}>
             <View style={styles.modalHandle} />
-            
+
             <View style={styles.modalHeader}>
               <View>
                 <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>

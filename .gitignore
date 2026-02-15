@@ -6,3 +6,4 @@ backend/check_env.py
 backend/fix_db_access.sh
 Aurestra/API_URL.js
 *.apk
+Aurestra/API_URL.js

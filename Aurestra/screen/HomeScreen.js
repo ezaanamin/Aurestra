@@ -70,44 +70,44 @@ const HomeScreen = ({ navigation }) => {
   const closeMonthPicker = () => setShowMonthPicker(false);
   const handleConfirm = (date) => {
     try {
-      // DEBUG: Step 1
-      ToastAndroid.show("Step 1: Month selected: " + date.toISOString(), ToastAndroid.SHORT);
-
       const monthStr = date.toISOString().slice(0, 7);
       setSelectedMonth(monthStr);
       closeMonthPicker();
 
-      // DEBUG: Step 2
-      ToastAndroid.show("Step 2: Picker closed. Waiting...", ToastAndroid.SHORT);
-
       // Small delay to allow MonthPicker to close completely
       setTimeout(() => {
         try {
-          // DEBUG: Step 3
-          ToastAndroid.show("Step 3: Opening Modal...", ToastAndroid.SHORT);
-
           setShowStatementModal(true);
-
-          // DEBUG: Step 4
-          ToastAndroid.show("Step 4: Dispatching API call...", ToastAndroid.SHORT);
 
           dispatch(calculatePreviousStatement(monthStr))
             .then((result) => {
-              // DEBUG: Step 5 (Success)
-              ToastAndroid.show("Step 5: API Success. Modal status: " + (showStatementModal ? "Visible" : "Hidden"), ToastAndroid.SHORT);
               dispatch(fetchUserAccounts());
             })
             .catch((err) => {
-              // DEBUG: Step 5 (Error)
-              alert("Step 5 Error: " + err.message);
               console.error("Statement calculation error:", err);
             });
         } catch (innerErr) {
-          alert("Inner Timeout Error: " + innerErr.message);
+          console.error("Inner Timeout Error:", innerErr);
         }
-      }, 500); // Increased delay slightly to 500ms
+      }, 500);
     } catch (err) {
-      alert("Main Handler Error: " + err.message);
+      console.error("Main Handler Error:", err);
+    }
+  };
+
+  const handleSelectBalance = async (balanceValue) => {
+    try {
+      if (!selectedMonth) return;
+
+      const res = await dispatch(calculatePreviousStatement({
+        month: selectedMonth,
+        confirmed: true,
+        user_selected_balance: balanceValue
+      })).unwrap();
+
+      dispatch(fetchUserAccounts());
+    } catch (err) {
+      console.error("Selection Error:", err);
     }
   };
 
@@ -288,12 +288,12 @@ const HomeScreen = ({ navigation }) => {
   const getCurrentMonthYear = () => new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
   const getCategoryDetails = (categoryName) => {
-    if (CATEGORY_DETAILS_MAP[categoryName]) {
-      return CATEGORY_DETAILS_MAP[categoryName];
-    }
     const found = categories?.find(c => c.name === categoryName);
     if (found) {
       return { icon: found.icon, color: found.color };
+    }
+    if (CATEGORY_DETAILS_MAP[categoryName]) {
+      return CATEGORY_DETAILS_MAP[categoryName];
     }
     return CATEGORY_DETAILS_MAP['Miscellaneous'];
   };
@@ -443,7 +443,7 @@ const HomeScreen = ({ navigation }) => {
               <View style={styles.balanceLabelContainer}>
                 <Icon name="wallet" size={16} color="#94A3B8" style={{ marginRight: 6 }} />
                 <Text style={styles.balanceLabelText}>Total Balance</Text>
-                {checkpointTime && (
+                {checkpointTime && !isNaN(new Date(checkpointTime).getTime()) && (
                   <Text style={{ fontSize: 10, color: '#94A3B8', marginLeft: 8 }}>
                     Checkpoint: {new Date(checkpointTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </Text>
@@ -654,14 +654,14 @@ const HomeScreen = ({ navigation }) => {
 
             <View style={styles.categoriesGrid}>
               {topCategories.slice(0, 4).map((cat, idx) => {
-                const details = CATEGORY_DETAILS_MAP[cat.category] || CATEGORY_DETAILS_MAP['Miscellaneous'];
+                const details = getCategoryDetails(cat.category);
                 return (
                   <View key={idx} style={[styles.categoryCard, {
                     backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC',
                     borderColor: colors.border
                   }]}>
-                    <View style={[styles.categoryIconWrapper, { backgroundColor: details.color + '20' }]}>
-                      <Icon name={details.icon} size={24} color={details.color} />
+                    <View style={[styles.categoryIconWrapper, { backgroundColor: (details.color || '#64748B') + '20' }]}>
+                      <Icon name={details.icon} size={24} color={details.color || '#64748B'} />
                     </View>
                     <Text style={[styles.categoryName, { color: colors.textSecondary }]} numberOfLines={1}>
                       {cat.category}
@@ -780,17 +780,16 @@ const HomeScreen = ({ navigation }) => {
           ) : transactionsStatus === 'succeeded' && latestTransactions.length > 0 ? (
             <View style={styles.transactionsList}>
               {latestTransactions.map((txn, index) => {
-                const { type, icon } = getTransactionDetails(txn);
+                const { type, icon, color } = getTransactionDetails(txn);
                 const isIncome = type === 'credit';
-                const details = CATEGORY_DETAILS_MAP[txn.purpose] || CATEGORY_DETAILS_MAP['Miscellaneous'];
 
                 return (
                   <View
                     key={txn.id}
                     style={[styles.transactionItem, index === latestTransactions.length - 1 && styles.lastTransaction]}
                   >
-                    <View style={[styles.transactionIcon, { backgroundColor: details.color + '20' }]}>
-                      <Icon name={icon} size={22} color={details.color} />
+                    <View style={[styles.transactionIcon, { backgroundColor: (color || '#64748B') + '20' }]}>
+                      <Icon name={icon} size={22} color={color || '#64748B'} />
                     </View>
 
                     <View style={styles.transactionDetails}>
@@ -826,8 +825,22 @@ const HomeScreen = ({ navigation }) => {
           )}
         </View>
 
-        <View style={{ height: 24 }} />
+        <View style={{ height: 80 }} />
       </ScrollView>
+
+      {/* Floating Action Button */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => navigation.navigate('Transaction', { openAddModal: true })}
+        activeOpacity={0.8}
+      >
+        <LinearGradient
+          colors={['#8B5CF6', '#7C3AED']}
+          style={styles.fabGradient}
+        >
+          <Ionicons name="add" size={32} color="#FFFFFF" />
+        </LinearGradient>
+      </TouchableOpacity>
 
       {showSalaryModal && (
         <SalaryInputModal
@@ -876,171 +889,224 @@ const HomeScreen = ({ navigation }) => {
             ) : statementResult ? (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <View style={styles.statementSuccess}>
-                  <Icon name="check-circle" size={64} color="#10B981" style={{ marginBottom: 20 }} />
-                  <Text style={[styles.statementSuccessTitle, { color: colors.text }]}>
-                    Statement Processed!
-                  </Text>
-                  <Text style={styles.statementMonth}>
-                    {(() => {
-                      const m = statementResult.month;
-                      if (!m) return "Unknown Month";
-                      const [p1, p2] = m.split('-');
-                      const year = parseInt(p1) > 12 ? p1 : p2;
-                      const month = parseInt(p1) > 12 ? p2 : p1;
-                      const date = new Date(parseInt(year), parseInt(month) - 1);
-                      return date.toLocaleString('default', { month: 'long', year: 'numeric' });
-                    })()}
-                  </Text>
-
-                  {/* Read Status Badge */}
-                  <View style={[styles.statusBadge, {
-                    backgroundColor: statementResult.read_status === 'read' ? '#10B98110' : '#EF444410',
-                    borderColor: statementResult.read_status === 'read' ? '#10B981' : '#EF4444',
-                  }]}>
-                    <Icon
-                      name={statementResult.read_status === 'read' ? 'eye-check' : 'eye-off'}
-                      size={16}
-                      color={statementResult.read_status === 'read' ? '#10B981' : '#EF4444'}
-                    />
-                    <Text style={[styles.statusBadgeText, {
-                      color: statementResult.read_status === 'read' ? '#10B981' : '#EF4444'
-                    }]}>
-                      {statementResult.read_status === 'read'
-                        ? '✓ Read (Balance applied)'
-                        : '⚠ Unread (Balance will be added)'}
-                    </Text>
-                  </View>
-
-                  {/* Stats Grid */}
-                  <View style={styles.statementStats}>
-                    <View style={styles.statementStatItem}>
-                      <Text style={[styles.statementStatLabel, { color: colors.textSecondary }]}>Added</Text>
-                      <Text style={[styles.statementStatValue, { color: '#10B981' }]}>
-                        {statementResult.added_transactions ?? 0}
-                      </Text>
-                    </View>
-                    <View style={styles.statementStatItem}>
-                      <Text style={[styles.statementStatLabel, { color: colors.textSecondary }]}>Skipped</Text>
-                      <Text style={[styles.statementStatValue, { color: colors.text }]}>
-                        {statementResult.skipped_transactions ?? 0}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Transaction Table */}
-                  {statementResult.data && statementResult.data.length > 0 && (
-                    <View style={styles.transactionTable}>
-                      <Text style={[styles.tableTitle, { color: colors.textSecondary }]}>
-                        PROCESSED TRANSACTIONS
-                      </Text>
-
-                      <View style={[styles.tableHeader, {
-                        backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9'
-                      }]}>
-                        <Text style={[styles.tableHeaderText, { color: colors.textSecondary }]}>Date</Text>
-                        <Text style={[styles.tableHeaderText, { color: colors.textSecondary, flex: 2 }]}>Description</Text>
-                        <Text style={[styles.tableHeaderText, { color: colors.textSecondary, textAlign: 'right' }]}>Amount</Text>
+                  {statementResult.requires_selection ? (
+                    <View style={{ width: '100%' }}>
+                      <View style={[styles.statusBadge, { backgroundColor: '#F59E0B10', borderColor: '#F59E0B', marginBottom: 16 }]}>
+                        <Icon name="shield-alert-outline" size={20} color="#F59E0B" />
+                        <Text style={[styles.statusBadgeText, { color: '#F59E0B' }]}>Manual Verification Required</Text>
                       </View>
 
-                      <View style={[styles.tableBody, {
-                        borderColor: isDarkMode ? '#334155' : '#E2E8F0',
-                        backgroundColor: colors.background
-                      }]}>
-                        <ScrollView style={styles.tableScroll}>
-                          {statementResult.data.map((tx, idx) => {
-                            let day = '??';
-                            let monthShort = '???';
-                            const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+                      <Text style={{ fontSize: 13, color: colors.textSecondary, textAlign: 'center', marginBottom: 20 }}>
+                        Multiple potential balances found. Please select the correct one:
+                      </Text>
 
-                            try {
-                              if (tx.date.includes('/')) {
-                                const parts = tx.date.split('/');
-                                if (parts.length === 3) {
-                                  day = parts[0];
-                                  const mIndex = parseInt(parts[1], 10) - 1;
-                                  if (mIndex >= 0 && mIndex <= 11) {
-                                    monthShort = MONTHS[mIndex];
-                                  }
-                                }
-                              } else if (tx.date.includes('-')) {
-                                const d = new Date(tx.date);
-                                if (!isNaN(d.getTime())) {
-                                  day = d.getDate();
-                                  monthShort = MONTHS[d.getMonth()];
-                                }
-                              }
-                            } catch (err) { }
+                      {statementResult.all_email_data?.map((email, eIdx) => (
+                        <View key={eIdx} style={{ marginBottom: 16 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                            <Icon name="email-outline" size={14} color={colors.textSecondary} />
+                            <Text style={{ fontSize: 11, fontWeight: 'bold', color: colors.textSecondary }}>
+                              Statement {new Date(email.date).toLocaleDateString()}
+                            </Text>
+                          </View>
 
-                            return (
-                              <View key={idx} style={[styles.tableRow, {
-                                backgroundColor: idx % 2 === 0 ? 'transparent' : (isDarkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'),
-                                borderBottomWidth: idx < statementResult.data.length - 1 ? 1 : 0,
-                                borderBottomColor: colors.border
-                              }]}>
-                                <View style={styles.tableDateCell}>
-                                  <Text style={[styles.tableDay, { color: colors.text }]}>{day}</Text>
-                                  <Text style={[styles.tableMonth, { color: colors.textSecondary }]}>{monthShort}</Text>
+                          {email.balance_table?.map((row, rIdx) => (
+                            <TouchableOpacity
+                              key={rIdx}
+                              style={[styles.balanceOption, { backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC', borderColor: colors.border }]}
+                              onPress={() => handleSelectBalance(row.balance_value)}
+                            >
+                              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                <View style={[styles.typeTag, { backgroundColor: row.type === 'CLOSING' ? '#10B98120' : '#64748B20' }]}>
+                                  <Text style={[styles.typeTagText, { color: row.type === 'CLOSING' ? '#10B981' : '#64748B' }]}>{row.type}</Text>
                                 </View>
-
-                                <View style={styles.tableDescCell}>
-                                  <Text style={[styles.tableDesc, { color: colors.text }]} numberOfLines={2}>
-                                    {tx.description}
-                                  </Text>
-                                  {tx.status === 'added' && (
-                                    <View style={styles.newBadge}>
-                                      <Text style={styles.newBadgeText}>NEW</Text>
-                                    </View>
-                                  )}
-                                </View>
-
-                                <View style={styles.tableAmountCell}>
-                                  <Text style={[styles.tableAmount, {
-                                    color: tx.type === 'credit' ? '#10B981' : '#F43F5E'
-                                  }]}>
-                                    {tx.type === 'credit' ? '+' : '-'}{Math.abs(tx.amount).toLocaleString()}
-                                  </Text>
-                                </View>
+                                <Text style={[styles.balanceVal, { color: colors.text }]}>{formatPKR(row.balance_value)}</Text>
                               </View>
-                            );
-                          })}
-                        </ScrollView>
+                              <Icon name="chevron-right" size={20} color="#6366F1" />
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      ))}
+
+                      <TouchableOpacity
+                        style={[styles.statementDoneButton, { marginTop: 10, opacity: 0.8 }]}
+                        onPress={() => handleSelectBalance(statementResult.suggested_balances.closing_balance)}
+                      >
+                        <View style={[styles.statementDoneGradient, { backgroundColor: '#64748B' }]}>
+                          <Text style={styles.statementDoneText}>Use Suggested: {formatPKR(statementResult.suggested_balances.closing_balance)}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <>
+                      <Icon name="check-circle" size={64} color="#10B981" style={{ marginBottom: 20 }} />
+                      <Text style={[styles.statementSuccessTitle, { color: colors.text }]}>
+                        Statement Processed!
+                      </Text>
+                      <Text style={styles.statementMonth}>
+                        {(() => {
+                          const m = statementResult.month;
+                          if (!m || typeof m !== 'string' || !m.includes('-')) return m || "Unknown Month";
+                          const [p1, p2] = m.split('-');
+                          const year = parseInt(p1) > 12 ? p1 : p2;
+                          const month = parseInt(p1) > 12 ? p2 : p1;
+                          if (isNaN(year) || isNaN(month)) return m;
+                          const date = new Date(parseInt(year), parseInt(month) - 1);
+                          if (isNaN(date.getTime())) return m;
+                          return date.toLocaleString('default', { month: 'long', year: 'numeric' });
+                        })()}
+                      </Text>
+
+                      {/* Read Status Badge */}
+                      <View style={[styles.statusBadge, {
+                        backgroundColor: statementResult.read_status === 'read' ? '#10B98110' : '#EF444410',
+                        borderColor: statementResult.read_status === 'read' ? '#10B981' : '#EF4444',
+                      }]}>
+                        <Icon
+                          name={statementResult.read_status === 'read' ? 'eye-check' : 'eye-off'}
+                          size={16}
+                          color={statementResult.read_status === 'read' ? '#10B981' : '#EF4444'}
+                        />
+                        <Text style={[styles.statusBadgeText, {
+                          color: statementResult.read_status === 'read' ? '#10B981' : '#EF4444'
+                        }]}>
+                          {statementResult.read_status === 'read'
+                            ? '✓ Read (Balance applied)'
+                            : '⚠ Unread (Balance will be added)'}
+                        </Text>
                       </View>
-                    </View>
+
+                      {/* Stats Grid */}
+                      <View style={styles.statementStats}>
+                        <View style={styles.statementStatItem}>
+                          <Text style={[styles.statementStatLabel, { color: colors.textSecondary }]}>Added</Text>
+                          <Text style={[styles.statementStatValue, { color: '#10B981' }]}>
+                            {statementResult.added_transactions ?? 0}
+                          </Text>
+                        </View>
+                        <View style={styles.statementStatItem}>
+                          <Text style={[styles.statementStatLabel, { color: colors.textSecondary }]}>Skipped</Text>
+                          <Text style={[styles.statementStatValue, { color: colors.text }]}>
+                            {statementResult.skipped_transactions ?? 0}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Transaction Table */}
+                      {!!(statementResult.data && statementResult.data.length > 0) && (
+                        <View style={styles.transactionTable}>
+                          <Text style={[styles.tableTitle, { color: colors.textSecondary }]}>
+                            PROCESSED TRANSACTIONS
+                          </Text>
+
+                          <View style={[styles.tableHeader, {
+                            backgroundColor: isDarkMode ? '#1E293B' : '#F1F5F9'
+                          }]}>
+                            <Text style={[styles.tableHeaderText, { color: colors.textSecondary }]}>Date</Text>
+                            <Text style={[styles.tableHeaderText, { color: colors.textSecondary, flex: 2 }]}>Description</Text>
+                            <Text style={[styles.tableHeaderText, { color: colors.textSecondary, textAlign: 'right' }]}>Amount</Text>
+                          </View>
+
+                          <View style={[styles.tableBody, {
+                            borderColor: isDarkMode ? '#334155' : '#E2E8F0',
+                            backgroundColor: colors.background
+                          }]}>
+                            <ScrollView style={styles.tableScroll}>
+                              {statementResult.data.map((tx, idx) => {
+                                let day = '??';
+                                let monthShort = '???';
+                                const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+                                try {
+                                  if (tx.date.includes('/')) {
+                                    const parts = tx.date.split('/');
+                                    if (parts.length === 3) {
+                                      day = parts[0];
+                                      const mIndex = parseInt(parts[1], 10) - 1;
+                                      if (mIndex >= 0 && mIndex <= 11) {
+                                        monthShort = MONTHS[mIndex];
+                                      }
+                                    }
+                                  } else if (tx.date.includes('-')) {
+                                    const d = new Date(tx.date);
+                                    if (!isNaN(d.getTime())) {
+                                      day = d.getDate();
+                                      monthShort = MONTHS[d.getMonth()];
+                                    }
+                                  }
+                                } catch (err) { }
+
+                                return (
+                                  <View key={idx} style={[styles.tableRow, {
+                                    backgroundColor: idx % 2 === 0 ? 'transparent' : (isDarkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)'),
+                                    borderBottomWidth: idx < statementResult.data.length - 1 ? 1 : 0,
+                                    borderBottomColor: colors.border
+                                  }]}>
+                                    <View style={styles.tableDateCell}>
+                                      <Text style={[styles.tableDay, { color: colors.text }]}>{day}</Text>
+                                      <Text style={[styles.tableMonth, { color: colors.textSecondary }]}>{monthShort}</Text>
+                                    </View>
+
+                                    <View style={styles.tableDescCell}>
+                                      <Text style={[styles.tableDesc, { color: colors.text }]} numberOfLines={2}>
+                                        {tx.description}
+                                      </Text>
+                                      {tx.status === 'added' && (
+                                        <View style={styles.newBadge}>
+                                          <Text style={styles.newBadgeText}>NEW</Text>
+                                        </View>
+                                      )}
+                                    </View>
+
+                                    <View style={styles.tableAmountCell}>
+                                      <Text style={[styles.tableAmount, {
+                                        color: tx.type === 'credit' ? '#10B981' : '#F43F5E'
+                                      }]}>
+                                        {tx.type === 'credit' ? '+' : '-'}{Math.abs(tx.amount).toLocaleString()}
+                                      </Text>
+                                    </View>
+                                  </View>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Balances */}
+                      <View style={styles.balancesSection}>
+                        <View style={styles.balanceRow}>
+                          <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Opening Balance:</Text>
+                          <Text style={[styles.balanceValue, { color: colors.text }]}>
+                            {formatPKR(statementResult.balances?.opening || 0)}
+                          </Text>
+                        </View>
+                        <View style={styles.balanceRow}>
+                          <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Closing Balance:</Text>
+                          <Text style={[styles.balanceValue, { color: colors.text }]}>
+                            {formatPKR(statementResult.balances?.closing || 0)}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <TouchableOpacity
+                        onPress={() => {
+                          setShowStatementModal(false);
+                          onRefresh();
+                        }}
+                        style={styles.statementDoneButton}
+                      >
+                        <LinearGradient
+                          colors={['#10B981', '#059669']}
+                          style={styles.statementDoneGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                        >
+                          <Icon name="check-circle" size={20} color="#FFF" style={{ marginRight: 8 }} />
+                          <Text style={styles.statementDoneText}>Done</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </>
                   )}
-
-                  {/* Balances */}
-                  <View style={styles.balancesSection}>
-                    <View style={styles.balanceRow}>
-                      <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Opening Balance:</Text>
-                      <Text style={[styles.balanceValue, { color: colors.text }]}>
-                        {formatPKR(statementResult.balances?.opening || 0)}
-                      </Text>
-                    </View>
-                    <View style={styles.balanceRow}>
-                      <Text style={[styles.balanceLabel, { color: colors.textSecondary }]}>Closing Balance:</Text>
-                      <Text style={[styles.balanceValue, { color: colors.text }]}>
-                        {formatPKR(statementResult.balances?.closing || 0)}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <TouchableOpacity
-                    onPress={() => {
-                      setShowStatementModal(false);
-                      onRefresh();
-                    }}
-                    style={styles.statementDoneButton}
-                  >
-                    <LinearGradient
-                      colors={['#10B981', '#059669']}
-                      style={styles.statementDoneGradient}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                    >
-                      <Icon name="check-circle" size={20} color="#FFF" style={{ marginRight: 8 }} />
-                      <Text style={styles.statementDoneText}>Done</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
                 </View>
               </ScrollView>
             ) : null}
@@ -1055,7 +1121,7 @@ const HomeScreen = ({ navigation }) => {
         animationType="slide"
         onRequestClose={() => setShowSyncModal(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={styles.modalOverlayBottom}>
           <View style={[styles.syncModal, { backgroundColor: colors.card }]}>
             <TouchableOpacity
               onPress={() => setShowSyncModal(false)}
@@ -1097,7 +1163,7 @@ const HomeScreen = ({ navigation }) => {
                 }}>
                   <Icon name="history" size={14} color={colors.textSecondary} />
                   <Text style={{ fontSize: 12, color: colors.textSecondary, fontWeight: '500' }}>
-                    {syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0
+                    {syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0 && !isNaN(new Date(syncResult.lastBankingMessages[0].date).getTime())
                       ? `Last Bank SMS: ${new Date(syncResult.lastBankingMessages[0].date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}`
                       : `Last Scan: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}`
                     }
@@ -1106,7 +1172,7 @@ const HomeScreen = ({ navigation }) => {
 
                 {/* Scan Scope Badge */}
                 <Text style={{ fontSize: 10, color: colors.textSecondary, opacity: 0.8, marginTop: 4 }}>
-                  Looking for messages after: {syncResult?.scanFromDate ? new Date(syncResult.scanFromDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown'}
+                  Looking for messages after: {syncResult?.scanFromDate && !isNaN(new Date(syncResult.scanFromDate).getTime()) ? new Date(syncResult.scanFromDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown'}
                 </Text>
               </View>
             </View>
@@ -1168,8 +1234,7 @@ const HomeScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* New Transactions Section */}
-            {syncResult?.transactions && syncResult.transactions.filter(t => t.is_new).length > 0 && (
+            {!!(syncResult?.transactions && syncResult.transactions.filter(t => t.is_new).length > 0) && (
               <View style={{ marginVertical: 16 }}>
                 <View style={{
                   flexDirection: 'row',
@@ -1278,7 +1343,7 @@ const HomeScreen = ({ navigation }) => {
             )}
 
             {/* Banking Messages Status */}
-            {!syncResult?.hasRecentBankingMessages && syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0 && (
+            {!!(!syncResult?.hasRecentBankingMessages && syncResult?.lastBankingMessages && syncResult.lastBankingMessages.length > 0) && (
               <View style={{
                 marginVertical: 12,
                 padding: 16,
@@ -1690,8 +1755,7 @@ const HomeScreen = ({ navigation }) => {
               })()}
             </View>
 
-            {/* Errors Section */}
-            {syncResult?.errors && syncResult.errors.length > 0 && (
+            {!!(syncResult?.errors && syncResult.errors.length > 0) && (
               <View style={{
                 marginVertical: 12,
                 padding: 12,
@@ -2682,9 +2746,31 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
   },
+  balanceOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    gap: 12,
+  },
+  balanceVal: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  typeTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  typeTagText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
 
   // Sync Modal Styles
-  modalOverlay: {
+  modalOverlayBottom: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'flex-end',
@@ -2785,6 +2871,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 80,
+    right: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    elevation: 8,
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    zIndex: 1000,
+  },
+  fabGradient: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
 

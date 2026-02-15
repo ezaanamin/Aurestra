@@ -22,6 +22,7 @@ import LinkedAccountsScreen from './screen/LinkedAccountsScreen';
 import CategoryManagementScreen from './screen/CategoryManagementScreen';
 import FinancialInsightsScreen from './screen/FinancialInsightsScreen';
 import UncategorizedTransactionsScreen from './screen/UncategorizedTransactionsScreen';
+import SpamTransactionsScreen from './screen/SpamTransactionsScreen';
 
 const Stack = createStackNavigator();
 
@@ -147,6 +148,7 @@ const Root = () => {
         <Stack.Screen name="CategoryManagement" component={CategoryManagementScreen} />
         <Stack.Screen name="FinancialInsights" component={FinancialInsightsScreen} />
         <Stack.Screen name="UncategorizedTransactions" component={UncategorizedTransactionsScreen} />
+        <Stack.Screen name="SpamTransactions" component={SpamTransactionsScreen} />
         <Stack.Screen
           name="CurrencyConverter"
           component={CurrencyConverterScreen}

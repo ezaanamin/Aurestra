@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { fetchCategories, addCategory, deleteCategory } from '../API/slice/API';
+import { fetchCategories, addCategory, deleteCategory, updateCategory } from '../API/slice/API';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSettings } from '../context/SettingsContext';
 
@@ -23,8 +23,16 @@ const CategoryManagementScreen = ({ navigation }) => {
     const [modalVisible, setModalVisible] = useState(false);
     const [newCatName, setNewCatName] = useState('');
     const [selectedIcon, setSelectedIcon] = useState('cash');
+    const [selectedColor, setSelectedColor] = useState('#8B5CF6');
     const [catType, setCatType] = useState('spending'); // 'spending' or 'income'
     const [isAdding, setIsAdding] = useState(false);
+    const [editingCategory, setEditingCategory] = useState(null);
+
+    const colors_palette = [
+        '#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B',
+        '#6366F1', '#F43F5E', '#06B6D4', '#84CC16', '#A855F7',
+        '#FB923C', '#2DD4BF', '#FACC15', '#64748B', '#000000'
+    ];
 
     const icons = [
         // Spending / General
@@ -51,27 +59,50 @@ const CategoryManagementScreen = ({ navigation }) => {
         dispatch(fetchCategories());
     }, []);
 
-    const handleCreate = async () => {
+    const handleSubmit = async () => {
         if (!newCatName) {
             Alert.alert('Error', 'Please enter a category name');
             return;
         }
         setIsAdding(true);
         try {
-            await dispatch(addCategory({
+            const data = {
                 name: newCatName,
                 icon: selectedIcon,
+                color: selectedColor,
                 cat_type: catType
-            }));
-            setNewCatName('');
-            setSelectedIcon('cash');
-            setCatType('spending');
-            setModalVisible(false);
+            };
+
+            if (editingCategory) {
+                await dispatch(updateCategory({ id: editingCategory.id, data })).unwrap();
+            } else {
+                await dispatch(addCategory(data)).unwrap();
+            }
+
+            closeModal();
         } catch (error) {
-            Alert.alert('Error', 'Could not add category');
+            Alert.alert('Error', `Could not ${editingCategory ? 'update' : 'add'} category`);
         } finally {
             setIsAdding(false);
         }
+    };
+
+    const openEditModal = (category) => {
+        setEditingCategory(category);
+        setNewCatName(category.name);
+        setSelectedIcon(category.icon || 'cash');
+        setSelectedColor(category.color || '#8B5CF6');
+        setCatType(category.cat_type || 'spending');
+        setModalVisible(true);
+    };
+
+    const closeModal = () => {
+        setNewCatName('');
+        setSelectedIcon('cash');
+        setSelectedColor('#8B5CF6');
+        setCatType('spending');
+        setEditingCategory(null);
+        setModalVisible(false);
     };
 
     const handleDelete = (id, name, isDefault) => {
@@ -96,22 +127,28 @@ const CategoryManagementScreen = ({ navigation }) => {
 
 
     const renderItem = ({ item }) => (
-        <View style={[styles.categoryItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={[styles.iconContainer, { backgroundColor: colors.background }]}>
-                <Icon name={item.icon} size={24} color={colors.primary} />
+        <TouchableOpacity
+            onPress={() => openEditModal(item)}
+            style={[styles.categoryItem, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
+            <View style={[styles.iconContainer, { backgroundColor: (item.color || colors.background || '#F1F5F9') + '20' }]}>
+                <Icon name={item.icon} size={24} color={item.color || colors.primary} />
             </View>
             <Text style={[styles.categoryName, { color: colors.text }]}>{item.name}</Text>
             {!item.is_default && (
-                <TouchableOpacity onPress={() => handleDelete(item.id, item.name, item.is_default)}>
+                <TouchableOpacity onPress={(e) => {
+                    e.stopPropagation();
+                    handleDelete(item.id, item.name, item.is_default);
+                }}>
                     <Icon name="delete-outline" size={24} color="#EF4444" />
                 </TouchableOpacity>
             )}
             {item.is_default && (
-                <View style={styles.defaultBadge}>
-                    <Text style={styles.defaultBadgeText}>Default</Text>
+                <View style={[styles.defaultBadge, { backgroundColor: (item.color || '#64748B') + '20' }]}>
+                    <Text style={[styles.defaultBadgeText, { color: item.color || '#64748B' }]}>Default</Text>
                 </View>
             )}
-        </View>
+        </TouchableOpacity>
     );
 
     return (
@@ -144,11 +181,13 @@ const CategoryManagementScreen = ({ navigation }) => {
                 visible={modalVisible}
                 transparent={true}
                 animationType="slide"
-                onRequestClose={() => setModalVisible(false)}
+                onRequestClose={closeModal}
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
-                        <Text style={[styles.modalTitle, { color: colors.text }]}>Add Category</Text>
+                        <Text style={[styles.modalTitle, { color: colors.text }]}>
+                            {editingCategory ? 'Edit Category' : 'Add Category'}
+                        </Text>
 
                         <Text style={[styles.sectionTitle, { color: colors.text }]}>Category Name</Text>
                         <TextInput
@@ -180,8 +219,8 @@ const CategoryManagementScreen = ({ navigation }) => {
                             ))}
                         </View>
 
-                        <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Icon</Text>
-                        <View style={{ height: 250, marginBottom: 20 }}>
+                        <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Icon & Color</Text>
+                        <View style={{ height: 200, marginBottom: 10 }}>
                             <FlatList
                                 data={icons}
                                 numColumns={6}
@@ -189,27 +228,42 @@ const CategoryManagementScreen = ({ navigation }) => {
                                     <TouchableOpacity
                                         style={[
                                             styles.iconOption,
-                                            { borderColor: selectedIcon === item ? colors.primary : colors.border }
+                                            { borderColor: selectedIcon === item ? selectedColor : 'transparent' }
                                         ]}
                                         onPress={() => setSelectedIcon(item)}
                                     >
-                                        <Icon name={item} size={24} color={colors.text} />
+                                        <Icon name={item} size={24} color={selectedIcon === item ? selectedColor : colors.text} />
                                     </TouchableOpacity>
                                 )}
                                 keyExtractor={(item) => item}
-                                contentContainerStyle={{ gap: 12, paddingBottom: 10 }}
+                                contentContainerStyle={{ gap: 8, paddingBottom: 10 }}
                             />
                         </View>
 
+                        <View style={styles.colorPalette}>
+                            {colors_palette.map((color) => (
+                                <TouchableOpacity
+                                    key={color}
+                                    style={[
+                                        styles.colorOption,
+                                        { backgroundColor: color, borderColor: selectedColor === color ? colors.text : 'transparent' }
+                                    ]}
+                                    onPress={() => setSelectedColor(color)}
+                                />
+                            ))}
+                        </View>
+
                         <View style={styles.modalButtons}>
-                            <TouchableOpacity style={styles.cancelButton} onPress={() => setModalVisible(false)}>
+                            <TouchableOpacity style={styles.cancelButton} onPress={closeModal}>
                                 <Text style={styles.cancelButtonText}>Cancel</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.saveButton} onPress={handleCreate} disabled={isAdding}>
+                            <TouchableOpacity style={styles.saveButton} onPress={handleSubmit} disabled={isAdding}>
                                 {isAdding ? (
                                     <ActivityIndicator size="small" color="#FFFFFF" />
                                 ) : (
-                                    <Text style={styles.saveButtonText}>Add</Text>
+                                    <Text style={styles.saveButtonText}>
+                                        {editingCategory ? 'Update' : 'Add'}
+                                    </Text>
                                 )}
                             </TouchableOpacity>
                         </View>
@@ -301,6 +355,19 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 1,
         borderColor: 'transparent',
+    },
+    colorPalette: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+        marginBottom: 20,
+        justifyContent: 'center'
+    },
+    colorOption: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        borderWidth: 2,
     },
     typeSelector: {
         flexDirection: 'row',

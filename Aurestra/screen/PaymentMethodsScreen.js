@@ -39,8 +39,8 @@ const PaymentMethodsScreen = ({ navigation }) => {
             <ScrollView contentContainerStyle={styles.content}>
                 {methods.map((item) => (
                     <TouchableOpacity key={item.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <View style={[styles.iconWrapper, { backgroundColor: item.color + '20' }]}>
-                            <Icon name={item.icon} size={24} color={item.color} />
+                        <View style={[styles.iconWrapper, { backgroundColor: (item.color || '#64748B') + '20' }]}>
+                            <Icon name={item.icon} size={24} color={item.color || '#64748B'} />
                         </View>
                         <View style={styles.cardInfo}>
                             <Text style={[styles.cardName, { color: colors.text }]}>{item.name}</Text>

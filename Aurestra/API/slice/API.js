@@ -314,9 +314,9 @@ export const fetchStatementReport = createAsyncThunk(
 
 export const calculatePreviousStatement = createAsyncThunk(
   'api/calculatePreviousStatement',
-  async (monthStr, { rejectWithValue }) => {
+  async (params, { rejectWithValue }) => {
     try {
-      const payload = monthStr ? { month: monthStr } : {};
+      const payload = typeof params === 'string' ? { month: params } : params;
       const response = await axios.post(`${API_BASE_URL}/api/reports/statement/calculate`, payload);
       return response.data;
     } catch (error) {
@@ -415,6 +415,80 @@ export const fetchTopSpendingCategories = createAsyncThunk(
   }
 );
 
+export const deleteTransaction = createAsyncThunk(
+  'api/deleteTransaction',
+  async (txnId, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.delete(`${API_BASE_URL}/api/transactions/${txnId}`);
+      // Refresh relevant data
+      dispatch(fetchLatestTransactions());
+      dispatch(fetchTopSpendingCategories());
+      dispatch(fetchUncategorizedTransactions());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to delete transaction');
+    }
+  }
+);
+
+export const markAsSpam = createAsyncThunk(
+  'api/markAsSpam',
+  async (txnId, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/transactions/${txnId}/spam`);
+      // Refresh relevant data
+      dispatch(fetchLatestTransactions());
+      dispatch(fetchTopSpendingCategories());
+      dispatch(fetchUncategorizedTransactions());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to mark as spam');
+    }
+  }
+);
+
+export const bulkDeleteTransactions = createAsyncThunk(
+  'api/bulkDeleteTransactions',
+  async ({ transaction_ids }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/transactions/bulk-delete`, { transaction_ids });
+      dispatch(fetchUncategorizedTransactions());
+      dispatch(fetchLatestTransactions());
+      dispatch(fetchTopSpendingCategories());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to bulk delete');
+    }
+  }
+);
+
+export const bulkMarkAsSpam = createAsyncThunk(
+  'api/bulkMarkAsSpam',
+  async ({ transaction_ids }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/transactions/bulk-spam`, { transaction_ids });
+      dispatch(fetchUncategorizedTransactions());
+      dispatch(fetchLatestTransactions());
+      dispatch(fetchTopSpendingCategories());
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to bulk mark as spam');
+    }
+  }
+);
+
+export const fetchSpamTransactions = createAsyncThunk(
+  'api/fetchSpamTransactions',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/transactions/spam`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to fetch spam transactions');
+    }
+  }
+);
+
 // =======================================================
 // CATEGORIES ASYNC THUNKS
 // =======================================================
@@ -439,6 +513,18 @@ export const addCategory = createAsyncThunk(
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to add category');
+    }
+  }
+);
+
+export const updateCategory = createAsyncThunk(
+  'api/updateCategory',
+  async ({ id, data }, { rejectWithValue }) => {
+    try {
+      const response = await axios.put(`${API_BASE_URL}/api/categories/${id}`, data);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to update category');
     }
   }
 );
@@ -949,6 +1035,11 @@ const initialState = {
 
   // Global Server Status
   serverStatus: 'online', // 'online' | 'offline'
+
+  // Spam Transactions (NEW)
+  spamTransactions: [],
+  spamTransactionsStatus: 'idle',
+  spamTransactionsError: null,
 };
 
 // =======================================================
@@ -1075,6 +1166,12 @@ const APISlice = createSlice({
       })
       .addCase(addCategory.fulfilled, (state, action) => {
         state.categories.push(action.payload);
+      })
+      .addCase(updateCategory.fulfilled, (state, action) => {
+        const index = state.categories.findIndex(c => c.id === action.payload.id);
+        if (index !== -1) {
+          state.categories[index] = action.payload;
+        }
       })
       .addCase(deleteCategory.fulfilled, (state, action) => {
         state.categories = state.categories.filter(c => c.id !== action.payload);
@@ -1246,10 +1343,19 @@ const APISlice = createSlice({
         state.transactionsError = action.payload;
       })
       .addCase(updateTransaction.fulfilled, (state, action) => {
+        const id = action.payload.id || action.meta.arg.id;
+        const updatedTxn = action.payload.transaction || action.payload;
+
         // Update in latestTransactions if present
-        const index = state.latestTransactions.findIndex(t => t.id === action.payload.id);
+        const index = state.latestTransactions.findIndex(t => t.id === id);
         if (index !== -1) {
-          state.latestTransactions[index] = action.payload;
+          state.latestTransactions[index] = { ...state.latestTransactions[index], ...updatedTxn };
+        }
+
+        // Remove from uncategorized if it's now categorized
+        if (updatedTxn.categorization_status !== 'pending') {
+          state.uncategorizedTransactions = state.uncategorizedTransactions.filter(t => t.id !== id);
+          state.uncategorizedCount = Math.max(0, state.uncategorizedCount - 1);
         }
       })
 
@@ -1409,6 +1515,29 @@ const APISlice = createSlice({
         state.smsBatchError = action.payload;
       })
 
+      // Delete Transaction
+      .addCase(deleteTransaction.fulfilled, (state, action) => {
+        state.latestTransactions = state.latestTransactions.filter(t => t.id !== action.meta.arg);
+      })
+
+      // Mark as Spam
+      .addCase(markAsSpam.fulfilled, (state, action) => {
+        state.latestTransactions = state.latestTransactions.filter(t => t.id !== action.meta.arg);
+      })
+
+      // Fetch Spam Transactions
+      .addCase(fetchSpamTransactions.pending, (state) => {
+        state.spamTransactionsStatus = 'loading';
+      })
+      .addCase(fetchSpamTransactions.fulfilled, (state, action) => {
+        state.spamTransactionsStatus = 'succeeded';
+        state.spamTransactions = action.payload || [];
+      })
+      .addCase(fetchSpamTransactions.rejected, (state, action) => {
+        state.spamTransactionsStatus = 'failed';
+        state.spamTransactionsError = action.payload;
+      })
+
       // --- calculatePreviousStatement ---
       .addCase(calculatePreviousStatement.pending, (state) => {
         state.statementStatus = 'loading';
@@ -1447,7 +1576,7 @@ const APISlice = createSlice({
         state.uncategorizedError = action.payload;
       })
 
-      // Bulk Categorize
+      // Bulk Actions
       .addCase(bulkCategorizeTransactions.pending, (state) => {
         state.uncategorizedStatus = 'updating';
       })
@@ -1457,6 +1586,20 @@ const APISlice = createSlice({
       .addCase(bulkCategorizeTransactions.rejected, (state, action) => {
         state.uncategorizedStatus = 'failed';
         state.uncategorizedError = action.payload;
+      })
+
+      .addCase(bulkDeleteTransactions.pending, (state) => {
+        state.uncategorizedStatus = 'updating';
+      })
+      .addCase(bulkDeleteTransactions.fulfilled, (state, action) => {
+        state.uncategorizedStatus = 'succeeded';
+      })
+
+      .addCase(bulkMarkAsSpam.pending, (state) => {
+        state.uncategorizedStatus = 'updating';
+      })
+      .addCase(bulkMarkAsSpam.fulfilled, (state, action) => {
+        state.uncategorizedStatus = 'succeeded';
       })
 
       // Category Suggestion

@@ -13,6 +13,7 @@ import {
     ScrollView,
     TextInput,
     Animated,
+    Alert,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
@@ -26,6 +27,10 @@ import {
     fetchCategories,
     getSuggestedCategory,
     createCategorizationRule,
+    deleteTransaction,
+    markAsSpam,
+    bulkDeleteTransactions,
+    bulkMarkAsSpam,
 } from '../API/slice/API';
 
 const UncategorizedTransactionsScreen = ({ navigation }) => {
@@ -36,15 +41,12 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
     const uncategorizedTransactions = useSelector((state) => state.API?.uncategorizedTransactions || []);
     const uncategorizedStatus = useSelector((state) => state.API?.uncategorizedStatus || 'idle');
     const categories = useSelector((state) => state.API?.categories || []);
-    const categorysuggestion = useSelector((state) => state.API?.categorysuggestion);
 
     // Local State
     const [bulkMode, setBulkMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState([]);
     const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
     const [selectedTransaction, setSelectedTransaction] = useState(null);
-    const [rulePromptVisible, setRulePromptVisible] = useState(false);
-    const [pendingRule, setPendingRule] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
@@ -94,6 +96,45 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
         setSelectedIds([]);
     };
 
+    const handleBulkDelete = async () => {
+        if (selectedIds.length === 0) return;
+
+        Alert.alert(
+            'Delete Transactions',
+            `Are you sure you want to delete ${selectedIds.length} transactions?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await dispatch(bulkDeleteTransactions({ transaction_ids: selectedIds })).unwrap();
+                            ToastAndroid.show(`✓ ${selectedIds.length} transactions deleted`, ToastAndroid.SHORT);
+                            setSelectedIds([]);
+                            setBulkMode(false);
+                        } catch (error) {
+                            ToastAndroid.show('✗ Failed to delete', ToastAndroid.SHORT);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleBulkSpam = async () => {
+        if (selectedIds.length === 0) return;
+
+        try {
+            await dispatch(bulkMarkAsSpam({ transaction_ids: selectedIds })).unwrap();
+            ToastAndroid.show(`✓ ${selectedIds.length} marked as spam`, ToastAndroid.SHORT);
+            setSelectedIds([]);
+            setBulkMode(false);
+        } catch (error) {
+            ToastAndroid.show('✗ Failed to mark as spam', ToastAndroid.SHORT);
+        }
+    };
+
     const handleCategorySelect = async (category) => {
         if (bulkMode) {
             try {
@@ -111,43 +152,25 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
             }
         } else {
             try {
-                await dispatch(updateTransaction({
+                const response = await dispatch(updateTransaction({
                     id: selectedTransaction.id,
-                    data: { category_id: category.id }
+                    data: {
+                        purpose: category.name,
+                        category_id: category.id
+                    }
                 })).unwrap();
 
                 ToastAndroid.show('✓ Category updated', ToastAndroid.SHORT);
-
-                const merchant = selectedTransaction.notes || selectedTransaction.sender || selectedTransaction.receiver || '';
-                if (merchant && merchant.length > 3) {
-                    setPendingRule({ merchant_pattern: merchant, category_id: category.id, category_name: category.name });
-                    setRulePromptVisible(true);
-                }
-
                 setCategoryPickerVisible(false);
                 dispatch(fetchUncategorizedTransactions());
             } catch (error) {
+                console.error("Update error:", error);
                 ToastAndroid.show('✗ Update failed', ToastAndroid.SHORT);
             }
         }
     };
 
-    const handleCreateRule = async () => {
-        if (pendingRule) {
-            try {
-                await dispatch(createCategorizationRule({
-                    merchant_pattern: pendingRule.merchant_pattern,
-                    category_id: pendingRule.category_id
-                })).unwrap();
 
-                ToastAndroid.show('✓ Rule created', ToastAndroid.SHORT);
-            } catch (error) {
-                ToastAndroid.show('✗ Failed to create rule', ToastAndroid.SHORT);
-            }
-        }
-        setRulePromptVisible(false);
-        setPendingRule(null);
-    };
 
     const renderTransaction = ({ item, index }) => {
         const isSelected = selectedIds.includes(item.id);
@@ -225,26 +248,43 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
         );
     };
 
-    const filteredCategories = categories.filter((cat) => {
-        if (selectedTransaction?.type === 'debit') {
-            return (cat.cat_type === 'spending' || cat.cat_type === 'both') &&
-                cat.name.toLowerCase().includes(searchQuery.toLowerCase());
-        } else {
-            return (cat.cat_type === 'income' || cat.cat_type === 'both') &&
-                cat.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const finalCategories = categories.filter((cat) => {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = (cat.name || '').toLowerCase().includes(query);
+
+        if (!matchesSearch) return false;
+
+        // If a transaction is selected, we try to match the type (income vs spending)
+        if (selectedTransaction && !searchQuery) {
+            const isIncome = selectedTransaction.type === 'credit';
+            const catType = (cat.cat_type || '').toLowerCase();
+
+            if (isIncome) {
+                return catType === 'income' || catType === 'both';
+            } else {
+                return catType === 'spending' || catType === 'both';
+            }
         }
+
+        // Default or search mode: show all matching categories
+        return true;
     });
+
+    // Final fallback: if no categories match the type, show all that match the search
+    const displayCategories = finalCategories.length > 0
+        ? finalCategories
+        : categories.filter(cat => (cat.name || '').toLowerCase().includes(searchQuery.toLowerCase()));
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-            <StatusBar 
-                barStyle="light-content" 
-                backgroundColor={isDarkMode ? '#0F172A' : '#1E293B'} 
+            <StatusBar
+                barStyle="light-content"
+                backgroundColor={isDarkMode ? '#0F172A' : '#1E293B'}
             />
 
             {/* Enhanced Header */}
-            <LinearGradient 
-                colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']} 
+            <LinearGradient
+                colors={isDarkMode ? ['#0F172A', '#1E293B', '#334155'] : ['#1E293B', '#334155', '#475569']}
                 style={styles.header}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
@@ -330,7 +370,7 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
                     <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
                         You have no uncategorized transactions
                     </Text>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={styles.emptyActionButton}
                         onPress={() => navigation.goBack()}
                     >
@@ -357,27 +397,46 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
             {bulkMode && selectedIds.length > 0 && (
                 <View style={[styles.bulkToolbar, { backgroundColor: colors.card, borderColor: colors.border }]}>
                     <View style={styles.toolbarLeft}>
-                        <Ionicons name="checkbox" size={20} color={colors.text} />
-                        <Text style={[styles.toolbarText, { color: colors.text }]}>
-                            {selectedIds.length} transaction{selectedIds.length !== 1 ? 's' : ''}
-                        </Text>
+                        <View style={styles.toolbarSelectionCount}>
+                            <Text style={styles.toolbarSelectionText}>{selectedIds.length}</Text>
+                        </View>
+                        <Text style={[styles.toolbarText, { color: colors.text }]}>Selected</Text>
                     </View>
-                    <TouchableOpacity
-                        style={styles.assignButton}
-                        onPress={() => {
-                            setSelectedTransaction(null);
-                            setCategoryPickerVisible(true);
-                        }}
-                        activeOpacity={0.8}
-                    >
-                        <LinearGradient
-                            colors={['#3B82F6', '#2563EB']}
-                            style={styles.assignButtonGradient}
+
+                    <View style={styles.toolbarActions}>
+                        <TouchableOpacity
+                            onPress={handleBulkSpam}
+                            style={[styles.toolbarIconAction, { backgroundColor: isDarkMode ? 'rgba(245, 158, 11, 0.1)' : '#FEF3C7' }]}
+                            activeOpacity={0.7}
                         >
-                            <Ionicons name="pricetag" size={18} color="#FFFFFF" />
-                            <Text style={styles.assignButtonText}>Assign Category</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
+                            <Ionicons name="warning" size={20} color="#F59E0B" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={handleBulkDelete}
+                            style={[styles.toolbarIconAction, { backgroundColor: isDarkMode ? 'rgba(239, 68, 68, 0.1)' : '#FEE2E2' }]}
+                            activeOpacity={0.7}
+                        >
+                            <Ionicons name="trash" size={20} color="#EF4444" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.assignButton}
+                            onPress={() => {
+                                setSelectedTransaction(null);
+                                setCategoryPickerVisible(true);
+                            }}
+                            activeOpacity={0.8}
+                        >
+                            <LinearGradient
+                                colors={['#3B82F6', '#2563EB']}
+                                style={styles.assignButtonGradient}
+                            >
+                                <Ionicons name="pricetag" size={16} color="#FFFFFF" />
+                                <Text style={styles.assignButtonText}>Assign</Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             )}
 
@@ -399,13 +458,50 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
                                     {bulkMode ? `${selectedIds.length} transactions selected` : 'Choose the right category'}
                                 </Text>
                             </View>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={() => setCategoryPickerVisible(false)}
                                 style={styles.modalCloseButton}
                             >
                                 <Ionicons name="close" size={24} color={colors.textSecondary} />
                             </TouchableOpacity>
                         </View>
+
+                        {/* Special Actions (Delete/Spam) */}
+                        {!bulkMode && (
+                            <View style={styles.specialActionsRow}>
+                                <TouchableOpacity
+                                    style={[styles.specialActionButton, { backgroundColor: '#EF444415' }]}
+                                    onPress={async () => {
+                                        try {
+                                            await dispatch(deleteTransaction(selectedTransaction.id)).unwrap();
+                                            ToastAndroid.show('Transaction deleted permanently', ToastAndroid.SHORT);
+                                            setCategoryPickerVisible(false);
+                                        } catch (e) {
+                                            ToastAndroid.show('Failed to delete', ToastAndroid.SHORT);
+                                        }
+                                    }}
+                                >
+                                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                                    <Text style={[styles.specialActionText, { color: '#EF4444' }]}>Delete</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.specialActionButton, { backgroundColor: '#F59E0B15' }]}
+                                    onPress={async () => {
+                                        try {
+                                            await dispatch(markAsSpam(selectedTransaction.id)).unwrap();
+                                            ToastAndroid.show('Marked as spam', ToastAndroid.SHORT);
+                                            setCategoryPickerVisible(false);
+                                        } catch (e) {
+                                            ToastAndroid.show('Failed to mark as spam', ToastAndroid.SHORT);
+                                        }
+                                    }}
+                                >
+                                    <Ionicons name="warning-outline" size={20} color="#F59E0B" />
+                                    <Text style={[styles.specialActionText, { color: '#F59E0B' }]}>Spam</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
 
                         {/* Search Bar */}
                         <View style={[styles.searchContainer, { backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC', borderColor: colors.border }]}>
@@ -424,74 +520,46 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
                             )}
                         </View>
 
-                        {/* Enhanced Suggestion */}
-                        {categorysuggestion?.suggestion && !bulkMode && (
-                            <View style={styles.suggestionContainer}>
-                                <View style={styles.suggestionHeader}>
-                                    <View style={styles.suggestionIconWrapper}>
-                                        <LinearGradient
-                                            colors={['#3B82F6', '#2563EB']}
-                                            style={styles.suggestionIconGradient}
-                                        >
-                                            <Ionicons name="bulb" size={18} color="#FFFFFF" />
-                                        </LinearGradient>
-                                    </View>
-                                    <Text style={[styles.suggestionLabel, { color: colors.text }]}>Smart Suggestion</Text>
-                                </View>
-                                <TouchableOpacity
-                                    style={styles.suggestionCard}
-                                    onPress={() => handleCategorySelect(categorysuggestion.suggestion)}
-                                    activeOpacity={0.8}
-                                >
-                                    <LinearGradient
-                                        colors={['#3B82F610', '#2563EB05']}
-                                        style={styles.suggestionCardGradient}
-                                    >
-                                        <View style={[styles.categoryIconContainer, {
-                                            backgroundColor: (categorysuggestion.suggestion.color || '#3B82F6') + '20'
-                                        }]}>
-                                            <MCIcon name={categorysuggestion.suggestion.icon || 'tag'} size={24} color={categorysuggestion.suggestion.color || '#3B82F6'} />
-                                        </View>
-                                        <Text style={[styles.suggestionCategoryName, { color: colors.text }]}>
-                                            {categorysuggestion.suggestion.name}
-                                        </Text>
-                                        <View style={styles.suggestionBadge}>
-                                            <Ionicons name="sparkles" size={12} color="#FFFFFF" />
-                                            <Text style={styles.suggestionBadgeText}>AI</Text>
-                                        </View>
-                                    </LinearGradient>
-                                </TouchableOpacity>
-                            </View>
-                        )}
+
 
                         {/* Categories List */}
-                        <ScrollView style={styles.categoryList} showsVerticalScrollIndicator={false}>
-                            <Text style={[styles.categoryListTitle, { color: colors.textSecondary }]}>
-                                All Categories
-                            </Text>
-                            {filteredCategories.map((cat, index) => (
+                        <Text style={[styles.categoryListTitle, { color: isDarkMode ? '#94A3B8' : '#64748B', marginLeft: 4, marginBottom: 8 }]}>
+                            All Categories
+                        </Text>
+                        <ScrollView
+                            style={styles.categoryList}
+                            contentContainerStyle={styles.categoryListContent}
+                            showsVerticalScrollIndicator={false}
+                            keyboardShouldPersistTaps="handled"
+                        >
+                            {displayCategories.map((cat, index) => (
                                 <TouchableOpacity
                                     key={cat.id}
                                     style={[
                                         styles.categoryOption,
                                         { borderColor: colors.border },
-                                        index === filteredCategories.length - 1 && styles.categoryOptionLast
+                                        index === displayCategories.length - 1 && styles.categoryOptionLast
                                     ]}
                                     onPress={() => handleCategorySelect(cat)}
                                     activeOpacity={0.7}
                                 >
-                                    <View style={[styles.categoryIconContainer, { backgroundColor: (cat.color || '#64748B') + '20' }]}>
-                                        <MCIcon name={cat.icon || 'tag'} size={22} color={cat.color || '#64748B'} />
+                                    <View style={[styles.categoryIconContainer, { backgroundColor: (cat.color || (isDarkMode ? '#334155' : '#F1F5F9')) + '20' }]}>
+                                        <MCIcon name={cat.icon || 'tag'} size={22} color={cat.color || (isDarkMode ? '#94A3B8' : '#64748B')} />
                                     </View>
                                     <Text style={[styles.categoryOptionName, { color: colors.text }]}>{cat.name}</Text>
-                                    <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                                    <Ionicons name="chevron-forward" size={12} color={colors.textSecondary} />
                                 </TouchableOpacity>
                             ))}
-                            {filteredCategories.length === 0 && (
+                            {(displayCategories.length === 0 && categories.length > 0) && (
+                                <Text style={{ textAlign: 'center', padding: 20, color: colors.textSecondary }}>
+                                    No categories found
+                                </Text>
+                            )}
+                            {categories.length === 0 && (
                                 <View style={styles.noResultsContainer}>
-                                    <Ionicons name="search-outline" size={48} color={colors.textSecondary} />
+                                    <ActivityIndicator size="small" color={colors.primary} />
                                     <Text style={[styles.noResultsText, { color: colors.textSecondary }]}>
-                                        No categories found
+                                        Loading categories...
                                     </Text>
                                 </View>
                             )}
@@ -500,58 +568,8 @@ const UncategorizedTransactionsScreen = ({ navigation }) => {
                 </View>
             </Modal>
 
-            {/* Enhanced Rule Prompt Modal */}
-            <Modal
-                animationType="fade"
-                transparent={true}
-                visible={rulePromptVisible}
-                onRequestClose={() => setRulePromptVisible(false)}
-            >
-                <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.7)' }]}>
-                    <View style={[styles.rulePromptCard, { backgroundColor: colors.card }]}>
-                        <View style={styles.ruleIconWrapper}>
-                            <LinearGradient
-                                colors={['#8B5CF6', '#7C3AED']}
-                                style={styles.ruleIconGradient}
-                            >
-                                <Ionicons name="sparkles" size={32} color="#FFFFFF" />
-                            </LinearGradient>
-                        </View>
-                        <Text style={[styles.rulePromptTitle, { color: colors.text }]}>Create Smart Rule?</Text>
-                        <Text style={[styles.rulePromptMessage, { color: colors.textSecondary }]}>
-                            Automatically categorize future transactions from{' '}
-                            <Text style={{ fontWeight: 'bold', color: colors.text }}>"{pendingRule?.merchant_pattern}"</Text>
-                            {' '}as{' '}
-                            <Text style={{ fontWeight: 'bold', color: colors.text }}>"{pendingRule?.category_name}"</Text>
-                        </Text>
-                        <View style={styles.rulePromptButtons}>
-                            <TouchableOpacity
-                                style={styles.ruleButton}
-                                onPress={() => setRulePromptVisible(false)}
-                                activeOpacity={0.7}
-                            >
-                                <View style={[styles.ruleButtonInner, { backgroundColor: colors.background, borderColor: colors.border }]}>
-                                    <Text style={[styles.ruleButtonText, { color: colors.textSecondary }]}>Not Now</Text>
-                                </View>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.ruleButton}
-                                onPress={handleCreateRule}
-                                activeOpacity={0.8}
-                            >
-                                <LinearGradient
-                                    colors={['#8B5CF6', '#7C3AED']}
-                                    style={styles.ruleButtonGradient}
-                                >
-                                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                                    <Text style={styles.ruleButtonTextPrimary}>Yes, Create Rule</Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-        </SafeAreaView>
+
+        </SafeAreaView >
     );
 };
 
@@ -850,19 +868,44 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
     },
     assignButtonText: {
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: 'bold',
         color: '#FFFFFF',
+    },
+    toolbarActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    toolbarIconAction: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    toolbarSelectionCount: {
+        backgroundColor: '#3B82F6',
+        borderRadius: 8,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        marginRight: 4,
+    },
+    toolbarSelectionText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: 'bold',
     },
     modalOverlay: {
         flex: 1,
         justifyContent: 'flex-end',
     },
     modalContent: {
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
         padding: 24,
         maxHeight: '85%',
+        flex: 1, // Added flex: 1 to ensure children like ScrollView can expand
     },
     modalHeader: {
         flexDirection: 'row',
@@ -957,7 +1000,30 @@ const styles = StyleSheet.create({
         letterSpacing: 0.5,
     },
     categoryList: {
-        maxHeight: 400,
+        flex: 1,
+        marginTop: 10,
+    },
+    categoryListContent: {
+        paddingBottom: 40,
+    },
+    specialActionsRow: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        paddingBottom: 20,
+        gap: 12,
+    },
+    specialActionButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        borderRadius: 12,
+        gap: 8,
+    },
+    specialActionText: {
+        fontSize: 14,
+        fontWeight: 'bold',
     },
     categoryListTitle: {
         fontSize: 12,

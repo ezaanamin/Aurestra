@@ -16,7 +16,8 @@ import {
     Switch,
     Alert,
     KeyboardAvoidingView,
-    Platform
+    Platform,
+    ToastAndroid
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
@@ -31,7 +32,10 @@ import {
     createTransaction,
     fetchCategories,
     fetchTotalExpenses,
-    fetchFinancialInsight
+    fetchFinancialInsight,
+    deleteTransaction,
+    markAsSpam,
+    fetchFourMonthHistory,
 } from '../API/slice/API';
 import LinearGradient from 'react-native-linear-gradient';
 
@@ -141,6 +145,7 @@ const TransactionScreen = ({ navigation, route }) => {
         dispatch(fetchCategories());
         dispatch(fetchTotalExpenses());
         dispatch(fetchFinancialInsight());
+        dispatch(fetchFourMonthHistory());
     };
 
     useEffect(() => {
@@ -178,13 +183,16 @@ const TransactionScreen = ({ navigation, route }) => {
 
     // Process Data
     const currentExpense = totalExpenses || historyData?.[0]?.actual?.expense || 0;
-    const prevExpense = historyData?.[1]?.actual?.expense || 1;
+    const prevExpense = historyData?.[1]?.actual?.expense || 0;
 
     let trend = 0;
     if (prevExpense > 0) {
         trend = Math.round(((currentExpense - prevExpense) / prevExpense) * 100);
+    } else if (currentExpense > 0 && prevExpense === 0) {
+        // If we have expenses this month but none last month, it's effectively a new spending cycle
+        trend = 100;
     }
-    const isPositiveTrend = trend <= 0;
+    const isPositiveTrend = currentExpense <= prevExpense;
 
     // Line Chart Data
     let chartLabels = [];
@@ -221,15 +229,30 @@ const TransactionScreen = ({ navigation, route }) => {
     let pieData = [];
     let totalSpent = 0;
 
+    const PIE_COLORS = [
+        '#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B',
+        '#6366F1', '#F43F5E', '#06B6D4', '#84CC16', '#A855F7'
+    ];
+
     if (topCategories && topCategories.length > 0) {
-        pieData = topCategories.map((cat) => {
-            const details = CATEGORY_DETAILS_MAP[cat.category] || CATEGORY_DETAILS_MAP['Miscellaneous'] || { color: '#808080', icon: 'help-circle' };
+        pieData = topCategories.map((cat, index) => {
+            // Find category details from map or existing category list
+            const matchedCategory = categories.find(c => c.name === cat.category);
+            const details = (matchedCategory ? { color: matchedCategory.color, icon: matchedCategory.icon } : null) ||
+                CATEGORY_DETAILS_MAP[cat.category] ||
+                { color: PIE_COLORS[index % PIE_COLORS.length], icon: 'help-circle' };
+
             const amount = Number(cat.total_spent) || 0;
             totalSpent += amount;
+
+            // Safe category name
+            const categoryName = cat.category || 'Other';
+            const shortName = categoryName.length > 12 ? categoryName.substring(0, 10) + '..' : categoryName;
+
             return {
-                name: cat.category,
+                name: shortName,
                 amount: amount,
-                color: details.color,
+                color: details.color || PIE_COLORS[index % PIE_COLORS.length],
                 legendFontColor: '#64748B',
                 legendFontSize: 12
             };
@@ -307,6 +330,14 @@ const TransactionScreen = ({ navigation, route }) => {
                         </TouchableOpacity>
 
                         <View style={{ flexDirection: 'row', gap: 12 }}>
+                            <TouchableOpacity
+                                onPress={() => navigation.navigate('SpamTransactions')}
+                            >
+                                <View style={[styles.iconButton, { backgroundColor: isDarkMode ? 'rgba(245,158,11,0.2)' : 'rgba(245,158,11,0.1)' }]}>
+                                    <Ionicons name="warning-outline" size={24} color="#F59E0B" />
+                                </View>
+                            </TouchableOpacity>
+
                             <TouchableOpacity
                                 style={styles.notificationButton}
                                 onPress={() => setAddModalVisible(true)}
@@ -627,7 +658,7 @@ const TransactionScreen = ({ navigation, route }) => {
                         <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
                             Recent Activity
                         </Text>
-                        <TouchableOpacity>
+                        <TouchableOpacity onPress={() => navigation.navigate('FullHistory')}>
                             <Text style={styles.seeAllText}>See All</Text>
                         </TouchableOpacity>
                     </View>
@@ -652,7 +683,11 @@ const TransactionScreen = ({ navigation, route }) => {
 
                         {latestTransactions && latestTransactions.slice(0, 8).map((transaction, index) => {
                             const categoryName = transaction.purpose || 'Other';
-                            const details = CATEGORY_DETAILS_MAP[categoryName] || CATEGORY_DETAILS_MAP['Miscellaneous'];
+                            // Find dynamic category details
+                            const matchedCategory = categories.find(c => c.name === categoryName);
+                            const dynamicDetails = matchedCategory ? { icon: matchedCategory.icon, color: matchedCategory.color } : null;
+                            const details = dynamicDetails || CATEGORY_DETAILS_MAP[categoryName] || CATEGORY_DETAILS_MAP['Miscellaneous'];
+
                             const isIncome = transaction.type === 'credit';
                             const icon = isIncome ? 'arrow-down-circle' : details.icon;
                             const color = isIncome ? '#10B981' : details.color;
@@ -674,8 +709,8 @@ const TransactionScreen = ({ navigation, route }) => {
                                     ]}
                                     onPress={() => openEditModal(transaction)}
                                 >
-                                    <View style={[styles.transactionIcon, { backgroundColor: color + '20' }]}>
-                                        <Ionicons name={icon} size={22} color={color} />
+                                    <View style={[styles.transactionIcon, { backgroundColor: (color || '#64748B') + '20' }]}>
+                                        <Ionicons name={icon} size={22} color={color || '#64748B'} />
                                     </View>
 
                                     <View style={styles.transactionInfo}>
@@ -684,10 +719,10 @@ const TransactionScreen = ({ navigation, route }) => {
                                         </Text>
                                         <View style={styles.transactionMeta}>
                                             <View style={[styles.categoryBadge, {
-                                                backgroundColor: color + '15',
-                                                borderColor: color + '30'
+                                                backgroundColor: (color || '#64748B') + '15',
+                                                borderColor: (color || '#64748B') + '30'
                                             }]}>
-                                                <Text style={[styles.categoryBadgeText, { color: color }]}>
+                                                <Text style={[styles.categoryBadgeText, { color: color || '#64748B' }]}>
                                                     {transaction.purpose || 'Uncategorized'}
                                                 </Text>
                                             </View>
@@ -755,10 +790,46 @@ const TransactionScreen = ({ navigation, route }) => {
                             </TouchableOpacity>
                         </View>
 
+                        {/* Special Actions (Delete/Spam) */}
+                        <View style={styles.specialActionsRow}>
+                            <TouchableOpacity
+                                style={[styles.specialActionButton, { backgroundColor: '#EF444415' }]}
+                                onPress={async () => {
+                                    try {
+                                        await dispatch(deleteTransaction(selectedTransaction.id)).unwrap();
+                                        ToastAndroid.show('Transaction deleted permanently', ToastAndroid.SHORT);
+                                        setModalVisible(false);
+                                    } catch (e) {
+                                        ToastAndroid.show('Failed to delete', ToastAndroid.SHORT);
+                                    }
+                                }}
+                            >
+                                <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                                <Text style={[styles.specialActionText, { color: '#EF4444' }]}>Delete</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.specialActionButton, { backgroundColor: '#F59E0B15' }]}
+                                onPress={async () => {
+                                    try {
+                                        await dispatch(markAsSpam(selectedTransaction.id)).unwrap();
+                                        ToastAndroid.show('Marked as spam', ToastAndroid.SHORT);
+                                        setModalVisible(false);
+                                    } catch (e) {
+                                        ToastAndroid.show('Failed to mark as spam', ToastAndroid.SHORT);
+                                    }
+                                }}
+                            >
+                                <Ionicons name="warning-outline" size={20} color="#F59E0B" />
+                                <Text style={[styles.specialActionText, { color: '#F59E0B' }]}>Spam</Text>
+                            </TouchableOpacity>
+                        </View>
+
                         <ScrollView style={styles.categoryScroll} showsVerticalScrollIndicator={false}>
                             {categories
                                 .filter(cat => {
-                                    if (selectedTransaction?.type === 'debit') {
+                                    const isSpending = !selectedTransaction || selectedTransaction.type === 'debit';
+                                    if (isSpending) {
                                         return cat.cat_type === 'spending' || cat.cat_type === 'both';
                                     } else {
                                         return cat.cat_type === 'income' || cat.cat_type === 'both';
@@ -936,6 +1007,20 @@ const TransactionScreen = ({ navigation, route }) => {
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
+
+            {/* Floating Action Button */}
+            <TouchableOpacity
+                style={[styles.fab, { backgroundColor: '#8B5CF6' }]}
+                onPress={() => setAddModalVisible(true)}
+                activeOpacity={0.8}
+            >
+                <LinearGradient
+                    colors={['#8B5CF6', '#7C3AED']}
+                    style={styles.fabGradient}
+                >
+                    <Ionicons name="add" size={32} color="#FFFFFF" />
+                </LinearGradient>
+            </TouchableOpacity>
         </SafeAreaView>
     );
 };
@@ -1383,6 +1468,25 @@ const styles = StyleSheet.create({
     categoryScroll: {
         maxHeight: 400,
     },
+    specialActionsRow: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        paddingBottom: 20,
+        gap: 12,
+    },
+    specialActionButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        borderRadius: 12,
+        gap: 8,
+    },
+    specialActionText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
     categoryOption: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1458,6 +1562,27 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#FFFFFF',
     },
+    fab: {
+        position: 'absolute',
+        bottom: 24,
+        right: 24,
+        width: 60,
+        height: 60,
+        borderRadius: 30,
+        elevation: 8,
+        shadowColor: '#8B5CF6',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 6,
+        zIndex: 1000,
+    },
+    fabGradient: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 30,
+        justifyContent: 'center',
+        alignItems: 'center',
+    }
 });
 
 export default TransactionScreen;

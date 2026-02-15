@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export let API_BASE_URL = 'https://complexity-departure-sail-portion.trycloudflare.com';
+export let API_BASE_URL = 'https://shipments-engines-frequently-insured.trycloudflare.com';
 
 export const setApiUrl = (url) => {
     if (!url) return;

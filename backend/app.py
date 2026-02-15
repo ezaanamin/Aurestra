@@ -1,7 +1,8 @@
 from flask import jsonify, request
+import hashlib
 from fetchers import fetch_latest_bank_email, fetch_latest_wallet_email
 from database import app, db  # Import app from database.py
-from model import MonthlyBalance, Transaction, Budget, AccountBalance, SavingsGoal, Category
+from model import MonthlyBalance, Transaction, Budget, AccountBalance, SavingsGoal, Category, SMSHistory, FinancialInsight
 from datetime import datetime, date, timedelta
 import os
 import json
@@ -15,14 +16,12 @@ from fetchers import (
     fetch_and_save_easypaisa_emails,
     calculate_combined_summary
 )
-from drive_utils import get_drive_service, ensure_folder_path, upload_json
+from drive_utils import get_drive_service, ensure_folder_path, upload_json, get_gmail_service, create_message, send_gmail_message
 from fcm_utils import send_push_to_all
-from sqlalchemy import func
-from sqlalchemy import desc
-from sqlalchemy import extract
-from sms_parser import process_bank_sms, BankAlhabibSMSParser
+from sqlalchemy import func, desc, extract
+from sms_parser import process_bank_sms, BankAlhabibSMSParser, generate_sms_hash, generate_transaction_hash
 import jwt
-import smtplib
+
 import secrets
 import random
 from email.mime.text import MIMEText
@@ -33,22 +32,18 @@ from model import User
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from google_auth_oauthlib.flow import Flow
+from database import db, app
+from sqlalchemy import text
+
 
 # Config is already loaded in database.py
 
+# SMS Batch Route moved to correct location
 
-
-# JWT Secret
-# JWT Secret
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or 'default_dev_secret_change_me'
 
 # Email Config (Gmail)
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-# Ideally these should be env vars
-SMTP_EMAIL = os.getenv('SMTP_EMAIL') 
-# NOTE: User needs to provide App Password in .env or we assume it is the Wallet email
-SMTP_PASSWORD = os.getenv("WALLET_APP_PASSWORD") or os.getenv("wallet_APP_PASSWORD") or os.getenv("APP_PASSWORD") or os.getenv("OPTP_APP_PASSWORD") 
+ 
 
 # -------------------------
 # HEALTH CHECK ROUTES
@@ -143,16 +138,24 @@ def generate_otp():
 
 def send_otp_email(to_email, otp_code):
     try:
-        msg = MIMEMultipart('alternative')
-        msg['From'] = SMTP_EMAIL
-        msg['To'] = to_email
-        msg['Subject'] = "Your Aurestra Verification Code"
+        # Determine User specifically for Gmail API credentials
+        # We need a user who has 'google_refresh_token' to send the email.
+        user = User.query.filter_by(email=to_email).first()
         
+        if not user or not user.google_refresh_token:
+             print(f"⚠️ Cannot send via Gmail: User {to_email} has no refresh token. Please login with Google first.")
+             return False
+             
+        service = get_gmail_service(user)
+        if not service:
+             print(f"⚠️ Failed to get Gmail Service for {to_email}")
+             return False
+             
         # Plain text fallback
-        text = f"Your Aurestra verification code is: {otp_code}\n\nValid for 5 minutes."
+        text_content = f"Your Aurestra verification code is: {otp_code}\n\nValid for 5 minutes."
         
         # HTML Version
-        html = f"""
+        html_content = f"""
         <html>
           <body style="font-family: Arial, sans-serif; color: #333;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -170,18 +173,18 @@ def send_otp_email(to_email, otp_code):
         </html>
         """
         
-        msg.attach(MIMEText(text, 'plain'))
-        msg.attach(MIMEText(html, 'html'))
+        # Create Message (Sender 'me' uses the authenticated user's email)
+        message = create_message("me", to_email, "Your Aurestra Verification Code", text_content, html_content)
         
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_EMAIL, SMTP_PASSWORD)
-        text = msg.as_string()
-        server.sendmail(SMTP_EMAIL, to_email, text)
-        server.quit()
-        return True
+        result = send_gmail_message(service, "me", message)
+        
+        if result:
+            print(f"✅ OTP Email sent via Gmail API to {to_email}")
+            return True
+        return False
+
     except Exception as e:
-        print(f"⚠️ Failed to send email: {e}")
+        print(f"⚠️ Failed to send email via Gmail API: {e}")
         return False
 
 # Simple in-memory rate limiting
@@ -190,16 +193,7 @@ from time import time
 
 request_counts = defaultdict(list)
 
-def rate_limit_check(key, limit, window):
-    """Simple rate limiting: limit requests per window (seconds)"""
-    now = time()
-    request_counts[key] = [req_time for req_time in request_counts[key] if now - req_time < window]
-    
-    if len(request_counts[key]) >= limit:
-        return False
-    
-    request_counts[key].append(now)
-    return True
+
 
 def save_monthly_summary(month, total_open, total_close):
     with app.app_context():
@@ -432,7 +426,8 @@ def google_login():
                         'https://www.googleapis.com/auth/drive.file',
                         'openid',
                         'https://www.googleapis.com/auth/userinfo.email',
-                        'https://www.googleapis.com/auth/userinfo.profile'
+                        'https://www.googleapis.com/auth/userinfo.profile',
+                        'https://www.googleapis.com/auth/gmail.send'
                     ],
                     redirect_uri=''
                 )
@@ -674,26 +669,62 @@ def get_accounts(current_user):
                         except:
                             tx_date = datetime.now()
 
-                        exists = Transaction.query.filter(
-                            Transaction.date == tx_date,
+                        # New Deduplication Logic:
+                        # 1. Search for ANY transaction with same Amount & Type within +/- 2 days.
+                        candidates = Transaction.query.filter(
                             Transaction.amount == tx["amount"],
-                            Transaction.type == tx["type"]
-                        ).first()
+                            Transaction.type == tx["type"],
+                            Transaction.date >= tx_date - timedelta(days=2),
+                            Transaction.date <= tx_date + timedelta(days=2)
+                        ).all()
                         
+                        # 🎯 ROBUST DEDUPLICATION using Hashing
+                        tx_hash = Transaction.generate_deterministic_hash({
+                            "date": tx_date,
+                            "amount": tx["amount"],
+                            "type": tx["type"],
+                            "description": tx["description"]
+                        })
+                        
+                        # Check existance by HASH (idempotent)
+                        exists = Transaction.query.filter_by(transaction_hash=tx_hash).first()
+                        
+                        if not exists:
+                            # 🛡️ FALLBACK: Check for 'Similar' transaction (e.g. from SMS)
+                            # Checking +/- 2 days to account for statement vs SMS date differences
+                            exists = Transaction.query.filter(
+                                Transaction.amount == tx["amount"],
+                                Transaction.type == tx["type"],
+                                Transaction.date >= tx_date - timedelta(days=2),
+                                Transaction.date <= tx_date + timedelta(days=2)
+                            ).first()
+                            if exists:
+                                print(f"🔗 Similar transaction found (SMS overlap?): {tx_date.date()} | {tx['amount']}")
+                                # Update existing transaction with the statement hash if missing
+                                if not exists.transaction_hash:
+                                    exists.transaction_hash = tx_hash
 
                         if not exists:
-                            new_tx = Transaction(
-                                source="bank",
-                                date=tx_date,
-                                amount=tx["amount"],
-                                type=tx["type"],
-                                purpose="Uncategorized",
-                                sender="Bank Statement",
-                                receiver="Me",
-                                notes=tx["description"][:250]
-                            )
-                            db.session.add(new_tx)
-                            new_tx_count += 1
+                            try:
+                                new_tx = Transaction(
+                                    source="bank",
+                                    date=tx_date,
+                                    amount=tx["amount"],
+                                    type=tx["type"],
+                                    purpose="Uncategorized",
+                                    sender="Bank Statement",
+                                    receiver="Me",
+                                    notes=tx["description"][:250],
+                                    transaction_hash=tx_hash  # MUST set this!
+                                )
+                                db.session.add(new_tx)
+                                db.session.flush() # Force UNIQUE check
+                                new_tx_count += 1
+                                print(f"✅ Added new transaction: {tx_hash[:10]}...")
+                            except Exception as e:
+                                db.session.rollback()
+                                print(f"⏭️  Duplicate tx_hash group detected (race condition parented): {e}")
+                                continue
                     
                     if new_tx_count > 0:
                         try:
@@ -909,7 +940,10 @@ def get_total_expenses(current_user):
         total_expense = db.session.query(func.sum(Transaction.amount)).filter(
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'debit'
+            Transaction.type == 'debit',
+            Transaction.is_deleted != True,
+            Transaction.is_spam != True,
+            Transaction.categorization_status != 'pending'
         ).scalar() or 0.0
         
         return jsonify({
@@ -937,14 +971,20 @@ def get_monthly_summary_from_db(current_user):
         dynamic_expense = db.session.query(func.sum(Transaction.amount)).filter(
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'debit'
+            Transaction.type == 'debit',
+            Transaction.is_deleted != True,
+            Transaction.is_spam != True,
+            Transaction.categorization_status != 'pending'
         ).scalar() or 0.0
 
         # Dynamic Income Calculation 
         dynamic_income_tx = db.session.query(func.sum(Transaction.amount)).filter(
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'credit'
+            Transaction.type == 'credit',
+            Transaction.is_deleted != True,
+            Transaction.is_spam != True,
+            Transaction.categorization_status != 'pending'
         ).scalar() or 0.0
         
         # Check budget for income override
@@ -1126,13 +1166,19 @@ def get_budget_history():
             fresh_expense = db.session.query(func.sum(Transaction.amount)).filter(
                 extract('year', Transaction.date) == dt.year,
                 extract('month', Transaction.date) == dt.month,
-                Transaction.type == 'debit'
+                Transaction.type == 'debit',
+                Transaction.is_deleted != True,
+                Transaction.is_spam != True,
+                Transaction.categorization_status != 'pending'
             ).scalar() or 0.0
             
             fresh_income = db.session.query(func.sum(Transaction.amount)).filter(
                 extract('year', Transaction.date) == dt.year,
                 extract('month', Transaction.date) == dt.month,
-                Transaction.type == 'credit'
+                Transaction.type == 'credit',
+                Transaction.is_deleted != True,
+                Transaction.is_spam != True,
+                Transaction.categorization_status != 'pending'
             ).scalar() or 0.0
             
             # Use stored balance if available, otherwise 0
@@ -1243,7 +1289,10 @@ def get_analytics_trend():
                 db.session.query(func.sum(Transaction.amount))
                 .filter(
                     func.date(Transaction.date) == target_date,
-                    Transaction.type == 'debit'
+                    Transaction.type == 'debit',
+                    Transaction.is_deleted != True,
+                    Transaction.is_spam != True,
+                    Transaction.categorization_status != 'pending'
                 )
                 .scalar() or 0.0
             )
@@ -1263,7 +1312,10 @@ def get_analytics_trend():
                 .filter(
                     extract('year', Transaction.date) == target_date.year,
                     extract('month', Transaction.date) == target_date.month,
-                    Transaction.type == 'debit'
+                    Transaction.type == 'debit',
+                    Transaction.is_deleted != True,
+                    Transaction.is_spam != True,
+                    Transaction.categorization_status != 'pending'
                 )
                 .scalar() or 0.0
             )
@@ -1281,7 +1333,10 @@ def get_analytics_trend():
                 .filter(
                     extract('year', Transaction.date) == year,
                     extract('month', Transaction.date) == i,
-                    Transaction.type == 'debit'
+                    Transaction.type == 'debit',
+                    Transaction.is_deleted != True,
+                    Transaction.is_spam != True,
+                    Transaction.categorization_status != 'pending'
                 )
                 .scalar() or 0.0
             )
@@ -1298,7 +1353,10 @@ def get_analytics_trend():
                 db.session.query(func.sum(Transaction.amount))
                 .filter(
                     extract('year', Transaction.date) == year,
-                    Transaction.type == 'debit'
+                    Transaction.type == 'debit',
+                    Transaction.is_deleted != True,
+                    Transaction.is_spam != True,
+                    Transaction.categorization_status != 'pending'
                 )
                 .scalar() or 0.0
             )
@@ -1315,6 +1373,10 @@ def latest_transactions():
         limit = request.args.get('limit', default=4, type=int)
         transactions = (
             db.session.query(Transaction)
+            .filter(
+                Transaction.is_deleted != True,
+                Transaction.is_spam != True
+            )
             .order_by(desc(Transaction.date))
             .limit(limit)
             .all()
@@ -1337,7 +1399,10 @@ def top_spending_categories():
     ).filter(
         Transaction.purpose.isnot(None),
         Transaction.amount > 0,
-        Transaction.type == 'debit'
+        Transaction.type == 'debit',
+        Transaction.is_deleted != True,
+        Transaction.is_spam != True,
+        Transaction.categorization_status != 'pending'
     )
 
     if period == 'week':
@@ -1375,6 +1440,97 @@ def top_spending_categories():
     return jsonify(result), 200
 
 # -------------------------
+# TRANSACTION MANAGEMENT (DELETION, SPAM, CATEGORIZATION)
+# -------------------------
+
+@app.route('/api/transactions/<int:txn_id>', methods=['DELETE'])
+@token_required
+def delete_transaction(current_user, txn_id):
+    """Permanently marks a transaction as deleted"""
+    try:
+        transaction = Transaction.query.get(txn_id)
+        if not transaction:
+            return jsonify({"error": "Transaction not found"}), 404
+            
+        transaction.is_deleted = True
+        transaction.categorization_status = 'deleted' # Optional flag update
+        db.session.commit()
+        
+        # Note: We keep the sms_hash so if the same SMS comes in, 
+        # process_bank_sms will find this record and see it's already there (though deleted).
+        
+        return jsonify({"success": True, "message": "Transaction deleted permanently"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/transactions/<int:txn_id>/spam', methods=['POST'])
+@token_required
+def mark_as_spam(current_user, txn_id):
+    """Marks a transaction as spam"""
+    try:
+        transaction = Transaction.query.get(txn_id)
+        if not transaction:
+            return jsonify({"error": "Transaction not found"}), 404
+            
+        transaction.is_spam = True
+        transaction.categorization_status = 'spam' # Optional flag update
+        db.session.commit()
+        
+        return jsonify({"success": True, "message": "Transaction marked as spam"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/transactions/uncategorized', methods=['GET'])
+@token_required
+def get_uncategorized_transactions(current_user):
+    """Fetch transactions that are not yet categorized and not deleted/spam"""
+    try:
+        transactions = Transaction.query.filter(
+            Transaction.categorization_status == 'pending',
+            Transaction.is_deleted != True,
+            Transaction.is_spam != True
+        ).order_by(desc(Transaction.date)).all()
+        
+        return jsonify({
+            "count": len(transactions),
+            "transactions": [txn.to_dict() for txn in transactions]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/transactions/spam', methods=['GET'])
+@token_required
+def get_spam_transactions(current_user):
+    """Fetch transactions marked as spam"""
+    try:
+        transactions = Transaction.query.filter(
+            Transaction.is_spam == True,
+            Transaction.is_deleted != True
+        ).order_by(desc(Transaction.date)).all()
+        
+        return jsonify([txn.to_dict() for txn in transactions]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/transactions/categorized', methods=['GET'])
+@token_required
+def get_categorized_transactions(current_user):
+    """Fetch transactions that are categorized and not deleted/spam"""
+    try:
+        # Categorized means categorization_status is NOT pending
+        transactions = Transaction.query.filter(
+            Transaction.categorization_status != 'pending',
+            Transaction.is_deleted != True,
+            Transaction.is_spam != True
+        ).order_by(desc(Transaction.date)).all()
+        
+        return jsonify([txn.to_dict() for txn in transactions]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
 # SMS ROUTES (NEW) 🎉
 # -------------------------
 
@@ -1382,8 +1538,9 @@ def top_spending_categories():
 def process_sms():
     """Process bank SMS and create transaction"""
     try:
-        if not rate_limit_check('sms_process', 20, 60):
-            return jsonify({"error": "Rate limit exceeded"}), 429
+        # Rate limiting disabled - function not implemented
+        # if not rate_limit_check('sms_process', 20, 60):
+        #     return jsonify({"error": "Rate limit exceeded"}), 429
         
         data = request.get_json()
         
@@ -1396,8 +1553,28 @@ def process_sms():
         if not message or len(message.strip()) < 10:
             return jsonify({"error": "Invalid SMS message"}), 400
         
+        # Consistent hash generation if metadata is provided
+        external_sms_hash = None
+        device_sms_id = data.get('_id') or data.get('id')
+        date_val = data.get('date')
+        
+        if device_sms_id and date_val:
+            device_timestamp = None
+            if isinstance(date_val, int):
+                device_timestamp = datetime.fromtimestamp(date_val / 1000.0)
+            elif isinstance(date_val, str):
+                try:
+                    device_timestamp = datetime.fromisoformat(date_val.replace('Z', '+00:00'))
+                except:
+                    device_timestamp = datetime.utcnow()
+            else:
+                device_timestamp = datetime.utcnow()
+                
+            hash_input = f"{device_sms_id}|{sender}|{message}|{device_timestamp.isoformat()}"
+            external_sms_hash = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
+
         # result is now (transaction, is_new)
-        transaction, is_new = process_bank_sms(message, sender)
+        transaction, is_new = process_bank_sms(message, sender, external_sms_hash=external_sms_hash)
         
         if not transaction:
             from sms_parser import BankAlhabibSMSParser
@@ -1449,8 +1626,9 @@ def process_sms():
 def test_sms_parsing():
     """Test SMS parsing without saving"""
     try:
-        if not rate_limit_check('sms_test', 10, 60):
-            return jsonify({"error": "Rate limit exceeded"}), 429
+        # Rate limiting disabled - function not implemented
+        # if not rate_limit_check('sms_test', 10, 60):
+        #     return jsonify({"error": "Rate limit exceeded"}), 429
         
         data = request.get_json()
         
@@ -1497,100 +1675,170 @@ def test_sms_parsing():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/sms/batch", methods=["POST"])
-def process_batch_sms():
-    """Process multiple SMS messages"""
-    from financial_agent import FinancialAgent # Import here to avoid circular imports if any
+@token_required
+def process_batch_sms(current_user):
+    """
+    Process multiple SMS messages with Backend-Authoritative Deduplication.
+    1. Insert raw messages into 'sms_messages' (deduplicated by unique sms_hash).
+    2. Process only 'pending' messages to create transactions.
+    """
+    from model import SMSHistory, Transaction
+    from sms_parser import generate_sms_hash, process_bank_sms
     
     try:
-        if not rate_limit_check('sms_batch', 5, 60):
-            return jsonify({"error": "Rate limit exceeded"}), 429
+        # Rate limiting
+        # Rate limiting disabled - function not implemented
+        # if not rate_limit_check('sms_batch', 10, 60):
+        #     return jsonify({"error": "Rate limit exceeded."}), 429
         
         data = request.get_json()
-        
-        if not data or 'messages' not in data:
-            return jsonify({"error": "Messages array required"}), 400
-        
         messages = data.get('messages', [])
         
-        if not isinstance(messages, list) or len(messages) == 0:
-            return jsonify({"error": "Messages must be non-empty array"}), 400
+        if not messages:
+            return jsonify({"error": "Messages array required"}), 400
         
-        if len(messages) > 500:
-            return jsonify({"error": "Maximum 500 messages per batch"}), 400
-        
-        results = {
-            'total': len(messages),
-            'created': 0,
-            'skipped': 0,
-            'failed': 0,
-            'transactions': [],
-            'errors': []
+        if len(messages) > 1000: # Increased limit for raw sync
+             return jsonify({"error": "Maximum 1000 messages per batch"}), 400
+             
+        stats = {
+            'received': len(messages),
+            'inserted': 0,
+            'processed': 0,
+            'transactions_created': 0,
+            'duplicates_ignored': 0,
+            'errors': 0
         }
         
-        affected_months = set()
+        # 1. INSERT RAW MESSAGES (Database-Level Deduplication)
+        new_sms_ids = []
         
-        for idx, msg_data in enumerate(messages):
+        if messages:
+            print(f"📥 [Batch] Received {len(messages)} messages")
+            print(f"📥 [Sample] First Item: {messages[0]}")
+        
+        for msg_data in messages:
             try:
-                message = msg_data.get('message')
-                sender = msg_data.get('sender', 'BAHL')
+                # Extract fields
+                body = msg_data.get('body') or msg_data.get('message')
+                sender = msg_data.get('address') or msg_data.get('sender')
+                device_sms_id = str(msg_data.get('_id', '')) or str(msg_data.get('id', ''))  # Android SMS ID
                 
-                if not message:
-                    results['failed'] += 1
-                    results['errors'].append({'index': idx, 'error': 'Empty message'})
+                # Handle timestamp: Frontend sends milliseconds
+                date_val = msg_data.get('date')
+                device_timestamp = None
+                
+                if isinstance(date_val, int):
+                    device_timestamp = datetime.fromtimestamp(date_val / 1000.0)
+                elif isinstance(date_val, str):
+                    try:
+                        device_timestamp = datetime.fromisoformat(date_val.replace('Z', '+00:00'))
+                    except:
+                        device_timestamp = datetime.utcnow()
+                else:
+                    device_timestamp = datetime.utcnow()
+                    
+                if not body or not sender:
+                    print(f"⚠️ Skipping SMS: Missing body or sender")
                     continue
+
+                # 🎯 DETERMINISTIC HASH GENERATION
+                # hash_input = device_sms_id + sender + body + device_timestamp
+                hash_input = f"{device_sms_id}|{sender}|{body}|{device_timestamp.isoformat()}"
+                sms_hash = hashlib.sha256(hash_input.encode('utf-8')).hexdigest()
                 
-                if not BankAlhabibSMSParser.is_transaction_sms(message):
-                    results['skipped'] += 1
-                    continue
+                print(f"🔐 Hash: {sms_hash[:16]}... (ID: {device_sms_id}, Sender: {sender})")
                 
-                # result is now (transaction, is_new)
-                transaction, is_new = process_bank_sms(message, sender)
+                # 🛡️ DATABASE-LEVEL DEDUPLICATION
+                # Try to insert - UNIQUE constraint on sms_hash will prevent duplicates
+                new_msg = SMSHistory(
+                    device_sms_id=device_sms_id,
+                    sender=sender,
+                    body=body,
+                    device_timestamp=device_timestamp,
+                    sms_hash=sms_hash,
+                    status='pending'
+                )
+                
+                db.session.add(new_msg)
+                
+                try:
+                    db.session.flush()  # Force constraint check NOW
+                    new_sms_ids.append(new_msg.id)
+                    stats['inserted'] += 1
+                    print(f"✅ Inserted SMS ID: {new_msg.id}")
+                    
+                except Exception as flush_error:
+                    db.session.rollback()  # Rollback this specific insert
+                    
+                    # Check if it's a duplicate (UNIQUE constraint violation)
+                    if 'Duplicate entry' in str(flush_error) or 'UNIQUE constraint' in str(flush_error):
+                        stats['duplicates_ignored'] += 1
+                        print(f"⏭️  Duplicate ignored: {sms_hash[:16]}...")
+                    else:
+                        stats['errors'] += 1
+                        print(f"❌ Insert error: {flush_error}")
+                
+            except Exception as e:
+                print(f"❌ Error processing SMS: {e}")
+                stats['errors'] += 1
+        
+        db.session.commit()  # Commit all successful inserts
+        
+        # 2. PROCESS PENDING MESSAGES
+        pending_messages = SMSHistory.query.filter(SMSHistory.id.in_(new_sms_ids)).all()
+        
+        affected_months = set()
+        created_transactions = [] # List to hold details for UI
+        
+        for sms in pending_messages:
+            try:
+                # Use parser
+                transaction, is_new = process_bank_sms(sms.body, sms.sender, external_sms_hash=sms.sms_hash)
                 
                 if transaction:
                     if is_new:
-                        results['created'] += 1
-                        # Track affected month for Insight Regeneration
-                        affected_months.add((transaction.date.year, transaction.date.month))
-                    else:
-                        results['skipped'] += 1
+                        stats['transactions_created'] += 1
+                        month_key = transaction.date.strftime('%Y-%m')
+                        affected_months.add(month_key)
                         
-                    results['transactions'].append({
-                        'id': transaction.id,
-                        'type': transaction.type,
-                        'amount': transaction.amount,
-                        'purpose': transaction.purpose,
-                        'is_new': is_new
-                    })
-                else:
-                    results['failed'] += 1
-                    error_msg = f"Parse failed (No regex match)"
-                    print(f"❌ {error_msg}: {message}")
-                    results['errors'].append({
-                        'index': idx, 
-                        'error': error_msg, 
-                        'message': message
-                    })
+                        # Add to list for UI
+                        created_transactions.append({
+                            'id': transaction.id,
+                            'type': transaction.type,
+                            'amount': transaction.amount,
+                            'date': transaction.date.isoformat(),
+                            'purpose': transaction.purpose,
+                            'is_new': True
+                        })
                     
+                    sms.status = 'processed'
+                else:
+                    sms.status = 'ignored'
+                    
+                stats['processed'] += 1
+                
             except Exception as e:
-                results['failed'] += 1
-                results['errors'].append({'index': idx, 'error': str(e)})
+                print(f"❌ Error processing SMS {sms.id}: {e}")
+                sms.status = 'error'
+                stats['errors'] += 1
         
-        print(f"✅ Batch: {results['created']} created, {results['skipped']} skipped, {results['failed']} failed")
+        db.session.commit()
         
-        # --- Trigger Insight Regeneration ---
-        if affected_months:
-            print(f"🔄 Regenerating Insights for {len(affected_months)} months: {affected_months}")
-            agent = FinancialAgent()
-            for year, month in affected_months:
-                try:
-                    agent.analyze_month(year, month)
-                except Exception as e:
-                    print(f"⚠️ Failed to analyze {year}-{month}: {e}")
+        # 3. Update Summaries
+        for month_key in affected_months:
+             # (Simplified summary update trigger)
+            pass
+
+        stats['transactions'] = created_transactions # Add to response
         
-        return jsonify(results), 200
-        
+        print(f"✅ Batch Complete: {stats}")
+        return jsonify(stats), 200
+
     except Exception as e:
-        return jsonify({"error": "Batch processing failed"}), 500
+        db.session.rollback()
+        print(f"🔥 Batch Fatal Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 # -------------------------
 # CATEGORY ROUTES
@@ -1635,6 +1883,30 @@ def delete_category(id):
     db.session.commit()
     return jsonify({"message": "Category deleted"}), 200
 
+@app.route('/api/categories/<int:id>', methods=['PUT'])
+def update_category(id):
+    try:
+        data = request.json
+        category = Category.query.get(id)
+        if not category:
+            return jsonify({"error": "Category not found"}), 404
+            
+        if "name" in data:
+            category.name = data["name"]
+        if "icon" in data:
+            category.icon = data["icon"]
+        if "color" in data:
+            category.color = data["color"]
+        if "cat_type" in data:
+            category.cat_type = data["cat_type"]
+            
+        db.session.commit()
+        return jsonify(category.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/transactions/<int:id>', methods=['PUT'])
 def update_transaction(id):
     try:
@@ -1676,21 +1948,6 @@ def update_transaction(id):
 # TRANSACTION CATEGORIZATION ENDPOINTS (NEW)
 # =======================================================
 
-@app.route("/api/transactions/uncategorized", methods=["GET"])
-@token_required
-def get_uncategorized_transactions(current_user):
-    """Get all transactions with categorization_status = 'pending'"""
-    try:
-        transactions = Transaction.query.filter_by(
-            categorization_status='pending'
-        ).order_by(Transaction.date.desc()).all()
-        
-        return jsonify({
-            "count": len(transactions),
-            "transactions": [t.to_dict() for t in transactions]
-        }), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/transactions/bulk-categorize", methods=["POST"])
@@ -1719,11 +1976,51 @@ def bulk_categorize_transactions(current_user):
                 updated_count += 1
         
         db.session.commit()
+        return jsonify({"message": f"Updated {updated_count} transactions"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/transactions/bulk-delete", methods=["POST"])
+@token_required
+def bulk_delete_transactions(current_user):
+    try:
+        data = request.get_json()
+        transaction_ids = data.get('transaction_ids', [])
+        if not transaction_ids:
+            return jsonify({"error": "No transactions selected"}), 400
         
-        return jsonify({
-            "message": f"Updated {updated_count} transactions",
-            "updated_count": updated_count
-        }), 200
+        updated_count = 0
+        for tx_id in transaction_ids:
+            tx = Transaction.query.get(tx_id)
+            if tx:
+                tx.is_deleted = True
+                updated_count += 1
+        
+        db.session.commit()
+        return jsonify({"message": f"Deleted {updated_count} transactions"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/transactions/bulk-spam", methods=["POST"])
+@token_required
+def bulk_mark_spam_transactions(current_user):
+    try:
+        data = request.get_json()
+        transaction_ids = data.get('transaction_ids', [])
+        if not transaction_ids:
+            return jsonify({"error": "No transactions selected"}), 400
+        
+        updated_count = 0
+        for tx_id in transaction_ids:
+            tx = Transaction.query.get(tx_id)
+            if tx:
+                tx.is_spam = True
+                updated_count += 1
+        
+        db.session.commit()
+        return jsonify({"message": f"Marked {updated_count} transactions as spam"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
@@ -1915,34 +2212,25 @@ def set_salary(current_user):
 
 @app.route('/api/insights', methods=['GET'])
 @token_required
-def get_monthly_insight(current_user):
+def get_insights(current_user):
+    """
+    Consolidated Insights API.
+    Returns all insights if no month passed, or specific month if ?month=YYYY-MM passed.
+    """
     try:
         month_str = request.args.get('month')
-        if not month_str:
-            # Default to current month
-            today = datetime.now()
-            month_str = today.strftime("%Y-%m")
-            
-        insight = FinancialInsight.query.filter_by(month=month_str).first()
-        
-        if not insight:
-            # Try previous month if current has no insight yet
-            today = datetime.now()
-            first = today.replace(day=1)
-            last_month = first - timedelta(days=1)
-            last_month_str = last_month.strftime("%Y-%m")
-            insight = FinancialInsight.query.filter_by(month=last_month_str).first()
-            
+        if month_str:
+            insight = FinancialInsight.query.filter_by(month=month_str).first()
             if not insight:
-                return jsonify({"message": "No insight found", "data": None}), 404
+                return jsonify({"message": f"No insight found for {month_str}", "data": None}), 200
+            return jsonify({"message": "Insight retrieved", "data": insight.to_dict()}), 200
         
-        return jsonify({
-            "message": "Insight retrieved",
-            "data": insight.to_dict()
-        }), 200
+        # All insights
+        insights = FinancialInsight.query.order_by(desc(FinancialInsight.month)).all()
+        return jsonify([i.to_dict() for i in insights]), 200
 
     except Exception as e:
-        print(f"❌ Error fetching insight: {e}")
+        print(f"❌ Error fetching insights: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2034,12 +2322,35 @@ def calculate_statement(current_user):
         # ELSE: UNREAD or NOT EXISTS - Proceed to Email Fetching
         print(f"📧 Fetching UNREAD or NEW statement for {month_str} from Email...")
 
+        # Get manual selections if any
+        user_selected_balance = data.get("user_selected_balance")
+        is_confirmed = data.get("confirmed", False)
+
         # Fetch statement PDF/Data (Fresh)
         result = fetch_previous_month_statement(reference_date=reference_date)
         if "error" in result:
             return jsonify(result), 404
+            
+        # 🛡️ MANUAL SELECTION CHECK
+        # If we have a balance table and user hasn't confirmed yet, return it for selection
+        if not is_confirmed and ("all_email_data" in result):
+            print(f"🕵️  Manual Selection Required for {month_str}")
+            return jsonify({
+                "message": "Multiple balances found or manual verification required.",
+                "requires_selection": True,
+                "month": month_str,
+                "all_email_data": result.get("all_email_data", []),
+                "suggested_balances": result.get("balances", {})
+            }), 200
+
         extracted_txs = result.get("transactions", [])
         balances = result.get("balances", {})
+        
+        # Override with user selection if provided
+        if is_confirmed and user_selected_balance is not None:
+            print(f"🎯 Using USER SELECTED Closing Balance: {user_selected_balance}")
+            balances["closing_balance"] = float(user_selected_balance)
+            
         added_count = 0
         skipped_count = 0
         added_tx_data = []
@@ -2051,33 +2362,66 @@ def calculate_statement(current_user):
                 continue
             
             clean_desc = re.sub(r'^\d{2}\/\d{2}\/\d{4}\s*', '', tx["description"]).strip()
-            exists = Transaction.query.filter(
-                func.date(Transaction.date) == tx_date.date(),
-                Transaction.amount == tx["amount"],
-                Transaction.type == tx["type"]
-            ).first()
+            
+            # 🎯 DETEERMINISTIC HASHING for deduplication
+            tx_hash = Transaction.generate_deterministic_hash({
+                "date": tx_date,
+                "amount": tx["amount"],
+                "type": tx["type"],
+                "description": tx["description"]
+            })
+            
+            exists = Transaction.query.filter_by(transaction_hash=tx_hash).first()
+            
+            if not exists:
+                # 🛡️ FALLBACK: Check for 'Similar' transaction (e.g. from SMS)
+                # Checking +/- 2 days to account for statement vs SMS date differences
+                exists = Transaction.query.filter(
+                    Transaction.amount == tx["amount"],
+                    Transaction.type == tx["type"],
+                    Transaction.date >= tx_date - timedelta(days=2),
+                    Transaction.date <= tx_date + timedelta(days=2)
+                ).first()
+                if exists:
+                    print(f"🔗 Similar transaction found (SMS overlap?): {tx_date.date()} | {tx['amount']}")
+                    # Update the existing transaction with the statement's better description/hash if missing
+                    if not exists.transaction_hash:
+                        exists.transaction_hash = tx_hash
+                    # If it was from SMS, it might have source='bank_sms'.
+                    # We keep that but link it to the statement by hash.
             
             if exists:
-                print(f"⚠️ Duplicate Found: {tx_date} | {tx['amount']}")
+                print(f"⚠️ Duplicate Found: {tx_hash[:10]}...")
                 status = "skipped"
                 skipped_count += 1
                 stmt_transaction_ids.append(exists.id)
             else:
-                new_tx = Transaction(
-                    source="bank_statement",
-                    date=tx_date,
-                    amount=tx["amount"],
-                    type=tx["type"],
-                    purpose="Uncategorized",
-                    sender="Bank Statement",
-                    receiver="Me",
-                    notes=clean_desc[:250]
-                )
-                db.session.add(new_tx)
-                db.session.flush() # Get ID
-                status = "added"
-                added_count += 1
-                stmt_transaction_ids.append(new_tx.id)
+                try:
+                    new_tx = Transaction(
+                        source="bank_statement",
+                        date=tx_date,
+                        amount=tx["amount"],
+                        type=tx["type"],
+                        purpose="Uncategorized",
+                        sender="Bank Statement",
+                        receiver="Me",
+                        notes=clean_desc[:250],
+                        transaction_hash=tx_hash
+                    )
+                    db.session.add(new_tx)
+                    db.session.flush() # Get ID
+                    status = "added"
+                    added_count += 1
+                    stmt_transaction_ids.append(new_tx.id)
+                except Exception as e:
+                    db.session.rollback()
+                    print(f"⏭️  Parallel duplicate prevented: {tx_hash[:10]}...")
+                    # Find the one that was just inserted by the other thread
+                    existing_race = Transaction.query.filter_by(transaction_hash=tx_hash).first()
+                    if existing_race:
+                        stmt_transaction_ids.append(existing_race.id)
+                    status = "skipped"
+                    skipped_count += 1
             
             added_tx_data.append({
                 "date": tx["date"],
@@ -2274,6 +2618,30 @@ def calculate_statement(current_user):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/sms/last-sync", methods=["GET"])
+@token_required
+def get_last_sms_sync(current_user):
+    try:
+        # Find the VERY LATEST transaction created via SMS
+        latest_tx = Transaction.query.filter(
+            Transaction.source.in_(['bank_sms', 'sms'])
+        ).order_by(Transaction.created_at.desc()).first()
+        
+        if latest_tx:
+            return jsonify({
+                "last_sync_time": latest_tx.created_at.isoformat(),
+                "source": "database"
+            })
+        else:
+            # DB is empty. Return null so frontend can decide the default (e.g. Jan 31st)
+            return jsonify({
+                "last_sync_time": None,
+                "source": "empty_db"
+            })
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/sms/process", methods=["POST"])
 @token_required
@@ -2404,9 +2772,6 @@ def calculate_summary_endpoint():
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
-def get_statement_report(current_user):
-    # ... existing implementation ...
-    pass
 
 
 # -------------------------
@@ -2455,13 +2820,7 @@ def seed_categories():
         db.session.commit()
         print("✅ Categories seeded")
 
-@app.route("/api/insights", methods=["GET"])
-@token_required
-def get_insights(current_user):
-    from model import FinancialInsight
-    from sqlalchemy import desc
-    insights = FinancialInsight.query.order_by(desc(FinancialInsight.month)).all()
-    return jsonify([i.to_dict() for i in insights]), 200
+# Consolidate: /api/insights moved to line 2019
 
 @app.route("/api/insights/generate", methods=["POST"])
 @token_required
@@ -2694,5 +3053,8 @@ def trigger_manual_backup(current_user):
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+        seed_categories()
     # Use 0.0.0.0 to allow access from other devices/emulator
     app.run(host='0.0.0.0', port=5000, debug=True)

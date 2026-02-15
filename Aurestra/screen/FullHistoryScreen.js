@@ -235,7 +235,7 @@ const FullHistoryScreen = ({ navigation }) => {
                                     key={option.value}
                                     style={[
                                         styles.sortOption,
-                                        sortBy === option.value && { backgroundColor: colors.primary + '20' }
+                                        sortBy === option.value && { backgroundColor: (colors.primary || '#8B5CF6') + '20' }
                                     ]}
                                     onPress={() => handleSort(option.value)}
                                 >
