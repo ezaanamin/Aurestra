@@ -42,6 +42,9 @@ from sqlalchemy import text
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or 'default_dev_secret_change_me'
 
+# Register AI Agent API Blueprint
+from ai_agent_api import ai_agent_bp
+app.register_blueprint(ai_agent_bp)
 # Email Config (Gmail)
  
 
@@ -2076,6 +2079,44 @@ def suggest_category(current_user):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/categories/monthly", methods=["GET"])
+@token_required
+def get_monthly_category_totals(current_user):
+    """
+    Get aggregated category totals for selected month sorted highest to lowest.
+    Query Parameter: month=YYYY-MM
+    """
+    try:
+        month_str = request.args.get('month')
+        if not month_str:
+            return jsonify({"message": "Month is required (YYYY-MM)"}), 400
+            
+        start_date = datetime.strptime(f"{month_str}-01", "%Y-%m-%d")
+        if start_date.month == 12:
+            end_date = start_date.replace(year=start_date.year + 1, month=1)
+        else:
+            end_date = start_date.replace(month=start_date.month + 1)
+            
+        totals = db.session.query(
+            Transaction.purpose.label('category'),
+            func.sum(Transaction.amount).label('total')
+        ).filter(
+            Transaction.date >= start_date,
+            Transaction.date < end_date,
+            Transaction.is_deleted == False,
+            Transaction.type == 'debit'
+        ).group_by(Transaction.purpose).all()
+        
+        sorted_totals = sorted(
+            [{"category": t.category or "Uncategorized", "total": float(t.total or 0)} for t in totals],
+            key=lambda x: x["total"],
+            reverse=True
+        )
+        
+        return jsonify(sorted_totals), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/categorization-rules", methods=["GET", "POST"])
 @token_required
@@ -2214,23 +2255,49 @@ def set_salary(current_user):
 @token_required
 def get_insights(current_user):
     """
-    Consolidated Insights API.
-    Returns all insights if no month passed, or specific month if ?month=YYYY-MM passed.
+    Returns the documentation for the exposed APIs for the AI Agent.
     """
     try:
-        month_str = request.args.get('month')
-        if month_str:
-            insight = FinancialInsight.query.filter_by(month=month_str).first()
-            if not insight:
-                return jsonify({"message": f"No insight found for {month_str}", "data": None}), 200
-            return jsonify({"message": "Insight retrieved", "data": insight.to_dict()}), 200
-        
-        # All insights
-        insights = FinancialInsight.query.order_by(desc(FinancialInsight.month)).all()
-        return jsonify([i.to_dict() for i in insights]), 200
+        endpoints = []
+        for rule in app.url_map.iter_rules():
+            if rule.endpoint.startswith("ai_agent."):
+                func = app.view_functions[rule.endpoint]
+                docstring = func.__doc__ or "No description available."
+                
+                # Dynamically generate real sample data by executing the underlying function
+                sample_data = None
+                if str(rule) == "/api/agent/exposed-endpoints":
+                    sample_data = {"message": "Self-referencing docs endpoint."}
+                else:
+                    try:
+                        # Bypass auth decorators to get the raw endpoint function
+                        original_func = getattr(func, '__wrapped__', func)
+                        
+                        # Execute it! (It will use the current request Context's args)
+                        res = original_func()
+                        
+                        if isinstance(res, tuple):
+                            res = res[0]
+                            
+                        if hasattr(res, 'get_json'):
+                            sample_data = res.get_json()
+                        elif hasattr(res, 'json'):
+                            sample_data = res.json
+                    except Exception as e:
+                        sample_data = {"error": f"Requires specific query parameters or payload. Detail: {str(e)}"}
+                
+                endpoints.append({
+                    "id": str(rule),  # used as key
+                    "endpoint": str(rule),
+                    "methods": [m for m in rule.methods if m not in ("HEAD", "OPTIONS")],
+                    "description": docstring.strip(),
+                    "sample_response": sample_data
+                })
+                
+        return jsonify(endpoints), 200
 
     except Exception as e:
-        print(f"❌ Error fetching insights: {e}")
+        print(f"❌ Error fetching insights/apis: {e}")
         return jsonify({"error": str(e)}), 500
 
 

@@ -61,6 +61,7 @@ const CATEGORY_DETAILS_MAP = {
 import SalaryInputModal from '../components/SalaryInputModal';
 import { API_BASE_URL } from '../API_URL';
 import MonthPickerModal from '../components/MonthPickerModal';
+import MonthlyCategories from '../components/MonthlyCategories';
 
 const HomeScreen = ({ navigation }) => {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
@@ -639,40 +640,8 @@ const HomeScreen = ({ navigation }) => {
         )}
 
         {/* Top Spending Categories */}
-        {topCategoriesStatus === 'succeeded' && Array.isArray(topCategories) && topCategories.length > 0 && (
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.cardHeader}>
-              <View>
-                <Text style={[styles.cardTitle, { color: colors.text }]}>Top Spending</Text>
-                <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>This month's categories</Text>
-              </View>
-              <TouchableOpacity onPress={() => navigation.navigate('Transaction')} style={styles.seeAllLink}>
-                <Text style={styles.linkText}>See All</Text>
-                <Icon name="chevron-right" size={16} color="#6366F1" />
-              </TouchableOpacity>
-            </View>
+        <MonthlyCategories />
 
-            <View style={styles.categoriesGrid}>
-              {topCategories.slice(0, 4).map((cat, idx) => {
-                const details = getCategoryDetails(cat.category);
-                return (
-                  <View key={idx} style={[styles.categoryCard, {
-                    backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC',
-                    borderColor: colors.border
-                  }]}>
-                    <View style={[styles.categoryIconWrapper, { backgroundColor: (details.color || '#64748B') + '20' }]}>
-                      <Icon name={details.icon} size={24} color={details.color || '#64748B'} />
-                    </View>
-                    <Text style={[styles.categoryName, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {cat.category}
-                    </Text>
-                    <Text style={[styles.categoryAmount, { color: colors.text }]}>{formatPKR(cat.total_spent)}</Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        )}
 
         {/* Savings Goal */}
         {goalsStatus === 'succeeded' && topGoal && (

@@ -620,7 +620,7 @@ const TransactionScreen = ({ navigation, route }) => {
                 </View>
 
                 {/* AI Insight Card */}
-                {financialInsight && (
+                {financialInsight && financialInsight.length > 0 && (
                     <View style={styles.insightCard}>
                         <LinearGradient
                             colors={isPositiveTrend
@@ -631,7 +631,7 @@ const TransactionScreen = ({ navigation, route }) => {
                         >
                             <View style={styles.insightIcon}>
                                 <Ionicons
-                                    name="sparkles"
+                                    name="server-outline"
                                     size={24}
                                     color={isPositiveTrend ? (isDarkMode ? '#D1FAE5' : '#059669') : (isDarkMode ? '#FEE2E2' : '#DC2626')}
                                 />
@@ -640,12 +640,12 @@ const TransactionScreen = ({ navigation, route }) => {
                                 <Text style={[styles.insightTitle, {
                                     color: isPositiveTrend ? (isDarkMode ? '#D1FAE5' : '#065F46') : (isDarkMode ? '#FEE2E2' : '#991B1B')
                                 }]}>
-                                    AI Financial Insight
+                                    Agent APIs Available
                                 </Text>
                                 <Text style={[styles.insightText, {
                                     color: isPositiveTrend ? (isDarkMode ? '#A7F3D0' : '#047857') : (isDarkMode ? '#FECACA' : '#B91C1C')
                                 }]}>
-                                    {financialInsight.content}
+                                    Your personal AI agent has access to {financialInsight.length} specialized financial data endpoints.
                                 </Text>
                             </View>
                         </LinearGradient>

@@ -179,7 +179,7 @@ const ProfileScreen = ({ navigation }) => {
     { icon: 'plus-circle', label: 'Add Transaction', color: '#8B5CF6', screen: 'Transaction', params: { openAddModal: true } },
     { icon: 'target', label: 'New Goal', color: '#10B981', screen: 'Saving' },
     { icon: 'chart-bar', label: 'Analytics', color: '#3B82F6', screen: 'Transaction' },
-    { icon: 'brain', label: 'AI Insights', color: '#F59E0B', screen: 'FinancialInsights' },
+    { icon: 'api', label: 'Agent APIs', color: '#F59E0B', screen: 'FinancialInsights' },
   ];
 
   const handleSaveApiUrl = async () => {

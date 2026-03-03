@@ -1,0 +1,27 @@
+
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+LOCK TABLES `statement_analysis` WRITE;
+/*!40000 ALTER TABLE `statement_analysis` DISABLE KEYS */;
+INSERT INTO `statement_analysis` (`id`, `month`, `opening_balance`, `closing_balance`, `total_income`, `total_expense`, `net_result`, `status`, `breakdown_json`, `analysis_date`, `balance_applied`, `reviewed_at`, `statement_id`, `transaction_ids`, `processing_status`, `processing_notes`) VALUES (1,'2026-01',2128,2128,44630,45753.2,-1123.2,'Deficit','{\"income\": {\"Uncategorized\": 44630.0}, \"expenses\": {\"Uncategorized\": 45753.2}}','2026-02-01 11:55:18',1,'2026-02-01 11:55:18','2026-01','[1, 2, 3, 4, 3, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 16, 16, 17, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39]','success',NULL);
+/*!40000 ALTER TABLE `statement_analysis` ENABLE KEYS */;
+UNLOCK TABLES;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+

@@ -1487,7 +1487,7 @@ const APISlice = createSlice({
       })
       .addCase(fetchFinancialInsight.fulfilled, (state, action) => {
         state.financialInsightStatus = 'succeeded';
-        state.financialInsight = action.payload?.data || null;
+        state.financialInsight = action.payload || null;
       })
       .addCase(fetchFinancialInsight.rejected, (state, action) => {
         state.financialInsightStatus = 'failed';
