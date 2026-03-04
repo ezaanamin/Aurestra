@@ -277,7 +277,7 @@ const HomeScreen = ({ navigation }) => {
     }
   }
 
-  const budgetSpent = monthlyExpense;
+  const budgetSpent = Math.max(0, monthlyExpense || 0);
   const budgetPercentage = budgetTotal > 0 ? (budgetSpent / budgetTotal) * 100 : 0;
   const topGoal = savingsGoals?.[0] || null;
   const savingsPercentage = topGoal ? (topGoal.current_amount / topGoal.target_amount) * 100 : 0;
@@ -295,7 +295,7 @@ const HomeScreen = ({ navigation }) => {
       currency: currency,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
-    }).format(Math.abs(amount));
+    }).format(amount);
   };
 
   const getDaysPassedInMonth = () => new Date().getDate();
@@ -497,7 +497,7 @@ const HomeScreen = ({ navigation }) => {
                 </View>
                 <View style={styles.statInfo}>
                   <Text style={styles.statLabel}>Expenses</Text>
-                  <Text style={styles.statValue}>{balanceVisible ? formatPKR(monthlyExpense) : '••••'}</Text>
+                  <Text style={styles.statValue}>{balanceVisible ? formatPKR(Math.max(0, monthlyExpense)) : '••••'}</Text>
                 </View>
               </View>
             </View>

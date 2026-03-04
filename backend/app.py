@@ -1425,12 +1425,9 @@ def top_spending_categories():
     
     query = db.session.query(
         Transaction.purpose.label("category"),
-        func.sum(case(
-            (Transaction.type == 'debit', Transaction.amount),
-            (Transaction.type == 'credit', -Transaction.amount),
-            else_=0
-        )).label("total_spent")
+        func.sum(Transaction.amount).label("total_spent")
     ).filter(
+        Transaction.type == 'debit',
         Transaction.purpose.isnot(None),
         Transaction.purpose.ilike('Uncategorized') == False,
         Transaction.is_deleted != True,
@@ -1442,14 +1439,10 @@ def top_spending_categories():
         start_date = datetime.now() - timedelta(days=7)
         query = query.filter(Transaction.date >= start_date)
     elif period == 'month':
-        latest_date = db.session.query(func.max(Transaction.date)).scalar()
-        if not latest_date:
-            return jsonify([]), 200
-        latest_year = latest_date.year
-        latest_month = latest_date.month
+        dt = datetime.now()
         query = query.filter(
-            extract('year', Transaction.date) == latest_year,
-            extract('month', Transaction.date) == latest_month
+            extract('year', Transaction.date) == dt.year,
+            extract('month', Transaction.date) == dt.month
         )
     elif period == 'year':
         latest_date = db.session.query(func.max(Transaction.date)).scalar()
@@ -1461,11 +1454,8 @@ def top_spending_categories():
     
     categories = (
         query.group_by(Transaction.purpose)
-        .order_by(func.sum(case(
-            (Transaction.type == 'debit', Transaction.amount),
-            (Transaction.type == 'credit', -Transaction.amount),
-            else_=0
-        )).desc())
+        .having(func.sum(Transaction.amount) > 0)
+        .order_by(func.sum(Transaction.amount).desc())
         .limit(10) # Increased limit for better breakdown
         .all()
     )
