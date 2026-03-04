@@ -1422,14 +1422,14 @@ def latest_transactions():
 @app.route('/api/transactions/top-categories', methods=['GET'])
 def top_spending_categories():
     period = request.args.get('period', default='month')
-    
+
     query = db.session.query(
         Transaction.purpose.label("category"),
         func.sum(Transaction.amount).label("total_spent")
     ).filter(
-        Transaction.type == 'debit',
+        Transaction.type == 'debit',  # ONLY debits, never credits
         Transaction.purpose.isnot(None),
-        Transaction.purpose.ilike('Uncategorized') == False,
+        Transaction.purpose != 'Uncategorized',
         Transaction.is_deleted != True,
         Transaction.is_spam != True,
         Transaction.categorization_status != 'pending'
@@ -1445,18 +1445,15 @@ def top_spending_categories():
             extract('month', Transaction.date) == dt.month
         )
     elif period == 'year':
-        latest_date = db.session.query(func.max(Transaction.date)).scalar()
-        if not latest_date:
-            return jsonify([]), 200
-        latest_year = latest_date.year
-        query = query.filter(extract('year', Transaction.date) == latest_year)
-    # 'all' doesn't need extra filtering
-    
+        query = query.filter(
+            extract('year', Transaction.date) == datetime.now().year
+        )
+
     categories = (
         query.group_by(Transaction.purpose)
         .having(func.sum(Transaction.amount) > 0)
         .order_by(func.sum(Transaction.amount).desc())
-        .limit(10) # Increased limit for better breakdown
+        .limit(10)
         .all()
     )
 
