@@ -18,7 +18,7 @@ from fetchers import (
 )
 from drive_utils import get_drive_service, ensure_folder_path, upload_json, get_gmail_service, create_message, send_gmail_message
 from fcm_utils import send_push_to_all
-from sqlalchemy import func, desc, extract
+from sqlalchemy import func, desc, extract, case
 from sms_parser import process_bank_sms, BankAlhabibSMSParser, generate_sms_hash, generate_transaction_hash
 import jwt
 
@@ -940,10 +940,15 @@ def get_total_expenses(current_user):
         
         # Calculate Expense Sum directly from Transactions
         # This is the single source of truth for "Expenses"
-        total_expense = db.session.query(func.sum(Transaction.amount)).filter(
+        total_expense = db.session.query(
+            func.sum(case(
+                (Transaction.type == 'debit', Transaction.amount),
+                (Transaction.type == 'credit', -Transaction.amount),
+                else_=0
+            ))
+        ).filter(
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'debit',
             Transaction.is_deleted != True,
             Transaction.is_spam != True,
             Transaction.categorization_status != 'pending'
@@ -971,10 +976,15 @@ def get_monthly_summary_from_db(current_user):
         dt = datetime.now()
         
         # Dynamic Expense Calculation
-        dynamic_expense = db.session.query(func.sum(Transaction.amount)).filter(
+        dynamic_expense = db.session.query(
+            func.sum(case(
+                (Transaction.type == 'debit', Transaction.amount),
+                (Transaction.type == 'credit', -Transaction.amount),
+                else_=0
+            ))
+        ).filter(
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'debit',
             Transaction.is_deleted != True,
             Transaction.is_spam != True,
             Transaction.categorization_status != 'pending'
@@ -1166,10 +1176,15 @@ def get_budget_history():
             
             # Dynamic Calculation for Freshness
             dt = datetime.strptime(month_str, "%Y-%m")
-            fresh_expense = db.session.query(func.sum(Transaction.amount)).filter(
+            fresh_expense = db.session.query(
+                func.sum(case(
+                    (Transaction.type == 'debit', Transaction.amount),
+                    (Transaction.type == 'credit', -Transaction.amount),
+                    else_=0
+                ))
+            ).filter(
                 extract('year', Transaction.date) == dt.year,
                 extract('month', Transaction.date) == dt.month,
-                Transaction.type == 'debit',
                 Transaction.is_deleted != True,
                 Transaction.is_spam != True,
                 Transaction.categorization_status != 'pending'
@@ -1289,10 +1304,13 @@ def get_analytics_trend():
         for i in range(6, -1, -1):
             target_date = datetime.now().date() - timedelta(days=i)
             total = (
-                db.session.query(func.sum(Transaction.amount))
+                db.session.query(func.sum(case(
+                    (Transaction.type == 'debit', Transaction.amount),
+                    (Transaction.type == 'credit', -Transaction.amount),
+                    else_=0
+                )))
                 .filter(
                     func.date(Transaction.date) == target_date,
-                    Transaction.type == 'debit',
                     Transaction.is_deleted != True,
                     Transaction.is_spam != True,
                     Transaction.categorization_status != 'pending'
@@ -1311,11 +1329,14 @@ def get_analytics_trend():
             month_str = target_date.strftime("%Y-%m")
             
             total = (
-                db.session.query(func.sum(Transaction.amount))
+                db.session.query(func.sum(case(
+                    (Transaction.type == 'debit', Transaction.amount),
+                    (Transaction.type == 'credit', -Transaction.amount),
+                    else_=0
+                )))
                 .filter(
                     extract('year', Transaction.date) == target_date.year,
                     extract('month', Transaction.date) == target_date.month,
-                    Transaction.type == 'debit',
                     Transaction.is_deleted != True,
                     Transaction.is_spam != True,
                     Transaction.categorization_status != 'pending'
@@ -1332,11 +1353,14 @@ def get_analytics_trend():
         for i in range(1, 13):
             year = datetime.now().year
             total = (
-                db.session.query(func.sum(Transaction.amount))
+                db.session.query(func.sum(case(
+                    (Transaction.type == 'debit', Transaction.amount),
+                    (Transaction.type == 'credit', -Transaction.amount),
+                    else_=0
+                )))
                 .filter(
                     extract('year', Transaction.date) == year,
                     extract('month', Transaction.date) == i,
-                    Transaction.type == 'debit',
                     Transaction.is_deleted != True,
                     Transaction.is_spam != True,
                     Transaction.categorization_status != 'pending'
@@ -1353,10 +1377,13 @@ def get_analytics_trend():
         for i in range(4, -1, -1):
             year = datetime.now().year - i
             total = (
-                db.session.query(func.sum(Transaction.amount))
+                db.session.query(func.sum(case(
+                    (Transaction.type == 'debit', Transaction.amount),
+                    (Transaction.type == 'credit', -Transaction.amount),
+                    else_=0
+                )))
                 .filter(
                     extract('year', Transaction.date) == year,
-                    Transaction.type == 'debit',
                     Transaction.is_deleted != True,
                     Transaction.is_spam != True,
                     Transaction.categorization_status != 'pending'
@@ -1398,11 +1425,14 @@ def top_spending_categories():
     
     query = db.session.query(
         Transaction.purpose.label("category"),
-        func.sum(Transaction.amount).label("total_spent")
+        func.sum(case(
+            (Transaction.type == 'debit', Transaction.amount),
+            (Transaction.type == 'credit', -Transaction.amount),
+            else_=0
+        )).label("total_spent")
     ).filter(
         Transaction.purpose.isnot(None),
-        Transaction.amount > 0,
-        Transaction.type == 'debit',
+        Transaction.purpose.ilike('Uncategorized') == False,
         Transaction.is_deleted != True,
         Transaction.is_spam != True,
         Transaction.categorization_status != 'pending'
@@ -1431,7 +1461,11 @@ def top_spending_categories():
     
     categories = (
         query.group_by(Transaction.purpose)
-        .order_by(func.sum(Transaction.amount).desc())
+        .order_by(func.sum(case(
+            (Transaction.type == 'debit', Transaction.amount),
+            (Transaction.type == 'credit', -Transaction.amount),
+            else_=0
+        )).desc())
         .limit(10) # Increased limit for better breakdown
         .all()
     )
@@ -2099,16 +2133,21 @@ def get_monthly_category_totals(current_user):
             
         totals = db.session.query(
             Transaction.purpose.label('category'),
-            func.sum(Transaction.amount).label('total')
+            func.sum(case(
+                (Transaction.type == 'debit', Transaction.amount),
+                (Transaction.type == 'credit', -Transaction.amount),
+                else_=0
+            )).label('total')
         ).filter(
             Transaction.date >= start_date,
             Transaction.date < end_date,
             Transaction.is_deleted == False,
-            Transaction.type == 'debit'
+            Transaction.purpose.isnot(None),
+            Transaction.purpose.ilike('Uncategorized') == False
         ).group_by(Transaction.purpose).all()
         
         sorted_totals = sorted(
-            [{"category": t.category or "Uncategorized", "total": float(t.total or 0)} for t in totals],
+            [{"category": t.category, "total": float(t.total or 0)} for t in totals],
             key=lambda x: x["total"],
             reverse=True
         )
@@ -2779,10 +2818,15 @@ def calculate_summary_endpoint():
             Transaction.type == 'credit'
         ).scalar() or 0.0
         
-        total_expense = db.session.query(func.sum(Transaction.amount)).filter(
+        total_expense = db.session.query(
+            func.sum(case(
+                (Transaction.type == 'debit', Transaction.amount),
+                (Transaction.type == 'credit', -Transaction.amount),
+                else_=0
+            ))
+        ).filter(
             extract('year', Transaction.date) == dt.year,
-            extract('month', Transaction.date) == dt.month,
-            Transaction.type == 'debit'
+            extract('month', Transaction.date) == dt.month
         ).scalar() or 0.0
         
         total_savings = total_income - total_expense

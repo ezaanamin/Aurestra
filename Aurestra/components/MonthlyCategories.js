@@ -3,25 +3,57 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import axios from 'axios';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useSettings } from '../context/SettingsContext';
-import MonthPickerModal from './MonthPickerModal';
+import { useNavigation } from '@react-navigation/native';
 import { API_BASE_URL } from '../API_URL';
 
+const CATEGORY_DETAILS_MAP = {
+    "Food & Snacks": { icon: 'food', color: '#FF6B6B' },
+    "Movies": { icon: 'movie', color: '#EC4899' },
+    "Tea": { icon: 'coffee', color: '#F59E0B' },
+    "Therapy": { icon: 'brain', color: '#8B5CF6' },
+    "Uber": { icon: 'car', color: '#4ECDC4' },
+    "Audible Subscription": { icon: 'headphones', color: '#A78BFA' },
+    "Google One Subscription": { icon: 'google', color: '#3B82F6' },
+    "Subscription (Google one )": { icon: 'google', color: '#3B82F6' },
+    "Ride / Transport": { icon: 'car', color: '#4ECDC4' },
+    "Bills & Utilities": { icon: 'receipt', color: '#3B82F6' },
+    "Shopping": { icon: 'shopping', color: '#A78BFA' },
+    "Healthcare": { icon: 'hospital', color: '#10B981' },
+    "Education": { icon: 'school', color: '#F59E0B' },
+    "Groceries": { icon: 'cart', color: '#10B981' },
+    "Personal Care": { icon: 'sparkles', color: '#8B5CF6' },
+    "Online Services": { icon: 'web', color: '#3B82F6' },
+    "Gym & Fitness": { icon: 'dumbbell', color: '#FF6B6B' },
+    "Income": { icon: 'cash', color: '#10B981' },
+    "Bonus": { icon: 'gift', color: '#F59E0B' },
+    "Investment": { icon: 'trending-up', color: '#3B82F6' },
+    "Uncategorized": { icon: 'help-circle', color: '#000000' },
+    "Comic book ": { icon: 'chart-arc', color: '#EC4899' },
+    "Bank reduction": { icon: 'bank-transfer-in', color: '#F59E0B' },
+    "Research Expenses": { icon: 'receipt', color: '#6366F1' },
+    "Reimbursement (Food expense)": { icon: 'human-greeting', color: '#F59E0B' },
+    "Miscellaneous": { icon: 'dots-horizontal', color: '#64748B' },
+    "Entertainment": { icon: 'movie', color: '#EC4899' }
+};
+
 export default function MonthlyCategories() {
+    const navigation = useNavigation();
     const { colors, isDarkMode } = useSettings();
-    const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+    const currentMonth = new Date().toISOString().slice(0, 7);
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showPicker, setShowPicker] = useState(false);
 
     useEffect(() => {
         fetchData();
-    }, [month]);
+    }, [currentMonth]);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const res = await axios.get(`${API_BASE_URL}/api/categories/monthly?month=${month}`);
-            setData(res.data);
+            const res = await axios.get(`${API_BASE_URL}/api/categories/monthly?month=${currentMonth}`);
+            // Filter out Uncategorized
+            const filteredData = res.data.filter(item => item.category.toLowerCase() !== 'uncategorized');
+            setData(filteredData);
         } catch (err) {
             console.error('Error fetching monthly categories:', err);
             setData([]);
@@ -52,9 +84,11 @@ export default function MonthlyCategories() {
         }
     };
 
-    const handleConfirmMonth = (date) => {
-        setMonth(date.toISOString().slice(0, 7));
-        setShowPicker(false);
+    const getCategoryDetails = (categoryName) => {
+        if (CATEGORY_DETAILS_MAP[categoryName]) {
+            return CATEGORY_DETAILS_MAP[categoryName];
+        }
+        return CATEGORY_DETAILS_MAP['Miscellaneous'];
     };
 
     return (
@@ -63,15 +97,15 @@ export default function MonthlyCategories() {
                 <View style={{ flex: 1 }}>
                     <Text style={[styles.cardTitle, { color: colors.text }]}>Top Spending</Text>
                     <Text style={[styles.cardSubtitle, { color: colors.textSecondary }]}>
-                        {getMonthName(month)}
+                        {getMonthName(currentMonth)}
                     </Text>
                 </View>
                 <TouchableOpacity
                     style={[styles.monthButton, { backgroundColor: isDarkMode ? '#1E293B' : '#F8FAFC' }]}
-                    onPress={() => setShowPicker(true)}
+                    onPress={() => navigation.navigate('MonthlyBreakdown')}
                 >
-                    <Icon name="calendar-month" size={16} color="#6366F1" style={{ marginRight: 6 }} />
-                    <Text style={[styles.monthButtonText, { color: colors.text }]}>Change Month</Text>
+                    <Icon name="chart-pie" size={16} color="#6366F1" style={{ marginRight: 6 }} />
+                    <Text style={[styles.monthButtonText, { color: colors.text }]}>Breakdown</Text>
                 </TouchableOpacity>
             </View>
 
@@ -81,7 +115,7 @@ export default function MonthlyCategories() {
                 </View>
             ) : data.length === 0 ? (
                 <View style={styles.emptyContainer}>
-                    <Text style={{ color: colors.textSecondary }}>No spending reported for {getMonthName(month)}</Text>
+                    <Text style={{ color: colors.textSecondary }}>No spending reported for {getMonthName(currentMonth)}</Text>
                 </View>
             ) : (
                 <View style={styles.listContainer}>
@@ -96,6 +130,11 @@ export default function MonthlyCategories() {
                                     index === data.length - 1 && styles.lastRow
                                 ]}
                             >
+                                <View style={styles.catIconContainer}>
+                                    <View style={[styles.iconCircle, { backgroundColor: `${getCategoryDetails(item.category).color}20` }]}>
+                                        <Icon name={getCategoryDetails(item.category).icon} size={20} color={getCategoryDetails(item.category).color} />
+                                    </View>
+                                </View>
                                 <View style={styles.categoryInfo}>
                                     <Text style={[styles.categoryName, { color: colors.text }]}>{item.category}</Text>
                                     <Text style={[styles.categoryPercent, { color: colors.textSecondary }]}>
@@ -111,12 +150,6 @@ export default function MonthlyCategories() {
                 </View>
             )}
 
-            <MonthPickerModal
-                visible={showPicker}
-                onConfirm={handleConfirmMonth}
-                onCancel={() => setShowPicker(false)}
-                isDarkMode={isDarkMode}
-            />
         </View>
     );
 }
@@ -180,6 +213,16 @@ const styles = StyleSheet.create({
     lastRow: {
         borderBottomWidth: 0,
         paddingBottom: 4,
+    },
+    catIconContainer: {
+        marginRight: 12,
+    },
+    iconCircle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     categoryInfo: {
         flex: 1,
