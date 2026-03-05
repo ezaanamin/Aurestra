@@ -938,31 +938,31 @@ def get_total_expenses(current_user):
     try:
         dt = datetime.now()
 
-        base_filters = [
+        common_filters = [
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
             Transaction.is_deleted != True,
             Transaction.is_spam != True,
-            # NOTE: categorization_status filter intentionally excluded.
-            # All non-deleted, non-spam transactions count toward spent budget,
-            # regardless of whether they've been categorized yet.
+            # categorization_status is intentionally NOT filtered here.
+            # Every real debit counts toward budget spent, pending or not.
         ]
 
+        # Budget spent = sum of ALL debits this month (what you actually spent).
+        # We do NOT subtract credits/income because salary, refunds, etc. should
+        # NOT reduce your spending figure on the progress bar.
         total_debits = db.session.query(func.sum(Transaction.amount)).filter(
-            *base_filters,
+            *common_filters,
             Transaction.type == 'debit'
         ).scalar() or 0.0
 
         total_credits = db.session.query(func.sum(Transaction.amount)).filter(
-            *base_filters,
+            *common_filters,
             Transaction.type == 'credit'
         ).scalar() or 0.0
 
-        net_spent = max(0.0, total_debits - total_credits)
-
         return jsonify({
             "month": dt.strftime("%Y-%m"),
-            "total_expense": net_spent,
+            "total_expense": total_debits,   # <-- budget spent = debits only
             "total_debits": total_debits,
             "total_credits": total_credits
         }), 200
