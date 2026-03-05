@@ -935,28 +935,49 @@ def contribute_to_savings_goal(current_user, id):
 
 def calculate_month_expenses(year, month):
     """
-    Budget spent = sum of all debit transactions for the month.
+    Running-balance expense calculation (date-ordered).
 
-    Credits (income like Salary, Bonus, refunds) are deliberately NOT
-    subtracted. A Rs 13,000 Bonus should never make your Rs 5,400
-    shopping spend look like Rs 0 on the budget bar.
+    Rules:
+      - Transactions are processed in chronological order.
+      - Debit  → adds to running expense total.
+      - Credit → reduces running expense, but ONLY what has already
+                 been accumulated. It CANNOT go below 0.
 
-    Only debits represent actual spending.
+    This means:
+      - A bonus/income that arrives BEFORE any spending has NO effect.
+      - A refund that arrives AFTER a purchase correctly reduces it.
+
+    Example A (your case):
+      Mar 01  Credit Rs 13,000  → running=0  (nothing to reduce)
+      Mar 05  Debit  Rs  5,400  → running=5,400
+      Result: Rs 5,400  ✅
+
+    Example B (refund case):
+      Mar 01  Debit  Rs 5,400   → running=5,400
+      Mar 05  Credit Rs   100   → running=5,300
+      Result: Rs 5,300  ✅
+
+    Example C (credit wipes all spending):
+      Mar 01  Debit  Rs 5,400   → running=5,400
+      Mar 05  Credit Rs 6,000   → running=0  (clamped)
+      Result: Rs 0  ✅
     """
     transactions = Transaction.query.filter(
         extract('year',  Transaction.date) == year,
         extract('month', Transaction.date) == month,
         Transaction.is_deleted != True,
         Transaction.is_spam    != True,
-    ).all()
+    ).order_by(Transaction.date.asc()).all()   # ← chronological order is key
 
-    total = 0.0
+    running = 0.0
     for txn in transactions:
         if txn.type == 'debit':
-            total += txn.amount
-        # credits are ignored — income is not subtracted from spending
+            running += txn.amount
+        elif txn.type == 'credit':
+            running = max(0.0, running - txn.amount)  # only reduce existing spending
 
-    return total   # always >= 0, debits can't be negative
+    return running
+
 
 
 
