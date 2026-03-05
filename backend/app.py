@@ -943,7 +943,9 @@ def get_total_expenses(current_user):
             extract('month', Transaction.date) == dt.month,
             Transaction.is_deleted != True,
             Transaction.is_spam != True,
-            Transaction.categorization_status != 'pending'
+            # NOTE: categorization_status filter intentionally excluded.
+            # All non-deleted, non-spam transactions count toward spent budget,
+            # regardless of whether they've been categorized yet.
         ]
 
         total_debits = db.session.query(func.sum(Transaction.amount)).filter(
