@@ -51,8 +51,10 @@ export default function MonthlyCategories() {
         setLoading(true);
         try {
             const res = await axios.get(`${API_BASE_URL}/api/categories/monthly?month=${currentMonth}`);
-            // Filter out Uncategorized
-            const filteredData = res.data.filter(item => item.category.toLowerCase() !== 'uncategorized');
+            // Filter out Uncategorized and any zero/negative totals (safety net against credits)
+            const filteredData = res.data.filter(item =>
+                item.category.toLowerCase() !== 'uncategorized' && item.total > 0
+            );
             setData(filteredData);
         } catch (err) {
             console.error('Error fetching monthly categories:', err);
@@ -62,7 +64,7 @@ export default function MonthlyCategories() {
         }
     };
 
-    const totalSpending = data.reduce((sum, item) => sum + item.total, 0);
+    const totalSpending = data.reduce((sum, item) => sum + Math.max(0, item.total), 0);
 
     const formatCurrency = (amount) => {
         const safeAmount = Number(amount) || 0;

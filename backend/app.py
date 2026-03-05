@@ -937,28 +937,34 @@ def contribute_to_savings_goal(current_user, id):
 def get_total_expenses(current_user):
     try:
         dt = datetime.now()
-        
-        # Calculate Expense Sum directly from Transactions
-        # This is the single source of truth for "Expenses"
-        total_expense = db.session.query(
-            func.sum(case(
-                (Transaction.type == 'debit', Transaction.amount),
-                (Transaction.type == 'credit', -Transaction.amount),
-                else_=0
-            ))
-        ).filter(
+
+        base_filters = [
             extract('year', Transaction.date) == dt.year,
             extract('month', Transaction.date) == dt.month,
             Transaction.is_deleted != True,
             Transaction.is_spam != True,
             Transaction.categorization_status != 'pending'
+        ]
+
+        total_debits = db.session.query(func.sum(Transaction.amount)).filter(
+            *base_filters,
+            Transaction.type == 'debit'
         ).scalar() or 0.0
-        
+
+        total_credits = db.session.query(func.sum(Transaction.amount)).filter(
+            *base_filters,
+            Transaction.type == 'credit'
+        ).scalar() or 0.0
+
+        net_spent = max(0.0, total_debits - total_credits)
+
         return jsonify({
             "month": dt.strftime("%Y-%m"),
-            "total_expense": total_expense
+            "total_expense": net_spent,
+            "total_debits": total_debits,
+            "total_credits": total_credits
         }), 200
-        
+
     except Exception as e:
         print(f"❌ Failed to get total expenses: {e}")
         return jsonify({"error": str(e)}), 500
