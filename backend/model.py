@@ -161,15 +161,18 @@ class Budget(db.Model):
     month = db.Column(db.String(7), nullable=False, unique=True)  # Format: "YYYY-MM"
     total_budget = db.Column(db.Float, nullable=False)
 
-    # Updated columns for detailed savings tracking: Needs, Wants, and Total
+    # Spending breakdown
     needs = db.Column(db.Float, nullable=False, default=0.0)
-    wants = db.Column(db.Float, nullable=False, default=0.0) # Re-introduced for non-essential goals
-    saving = db.Column(db.Float, nullable=False, default=0.0) # Total planned or achieved savings
+    wants = db.Column(db.Float, nullable=False, default=0.0)
+    saving = db.Column(db.Float, nullable=False, default=0.0)
+
+    # Calculated actual expenses for this month (updated on every /api/expenses/total call)
+    total_expenses = db.Column(db.Float, nullable=False, default=0.0)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def __repr__(self):
-        return f"<Budget {self.month} | Total: {self.total_budget} | Savings (Total): {self.saving}>"
+        return f"<Budget {self.month} | Total: {self.total_budget} | Expenses: {self.total_expenses}>"
 
 
 class AccountBalance(db.Model):

@@ -932,46 +932,96 @@ def contribute_to_savings_goal(current_user, id):
 # -------------------------
 # EXPENSE ROUTES
 # -------------------------
+
+def calculate_month_expenses(year, month):
+    """
+    Clean expense calculation for a given year/month.
+
+    Logic:
+      - Start at 0.
+      - Each debit transaction ADDS to the total.
+      - Each credit transaction REDUCES the total.
+      - Result is clamped to a minimum of 0 (can never be negative).
+
+    Example:
+      Debit  100  → total = 100
+      Debit   50  → total = 150
+      Credit  30  → total = 120   ✅
+
+    Filters applied:
+      - is_deleted = False
+      - is_spam    = False
+      - categorization_status is NOT filtered (every real transaction counts)
+    """
+    transactions = Transaction.query.filter(
+        extract('year',  Transaction.date) == year,
+        extract('month', Transaction.date) == month,
+        Transaction.is_deleted != True,
+        Transaction.is_spam    != True,
+    ).all()
+
+    total = 0.0
+    for txn in transactions:
+        if txn.type == 'debit':
+            total += txn.amount
+        elif txn.type == 'credit':
+            total -= txn.amount
+
+    return max(0.0, total)
+
+
 @app.route("/api/expenses/total", methods=["GET"])
 @token_required
 def get_total_expenses(current_user):
     try:
         dt = datetime.now()
+        year, month = dt.year, dt.month
+        month_str = dt.strftime("%Y-%m")
 
-        common_filters = [
-            extract('year', Transaction.date) == dt.year,
-            extract('month', Transaction.date) == dt.month,
-            Transaction.is_deleted != True,
-            Transaction.is_spam != True,
-            # categorization_status is intentionally NOT filtered here.
-            # Every real debit counts toward budget spent, pending or not.
-        ]
+        # --- Calculate from scratch ---
+        total_expenses = calculate_month_expenses(year, month)
 
-        # Budget spent = sum of ALL debits this month (what you actually spent).
-        # We do NOT subtract credits/income because salary, refunds, etc. should
-        # NOT reduce your spending figure on the progress bar.
+        # Also expose raw totals for debugging / other screens
         total_debits = db.session.query(func.sum(Transaction.amount)).filter(
-            *common_filters,
-            Transaction.type == 'debit'
+            extract('year',  Transaction.date) == year,
+            extract('month', Transaction.date) == month,
+            Transaction.type        == 'debit',
+            Transaction.is_deleted  != True,
+            Transaction.is_spam     != True,
         ).scalar() or 0.0
 
         total_credits = db.session.query(func.sum(Transaction.amount)).filter(
-            *common_filters,
-            Transaction.type == 'credit'
+            extract('year',  Transaction.date) == year,
+            extract('month', Transaction.date) == month,
+            Transaction.type        == 'credit',
+            Transaction.is_deleted  != True,
+            Transaction.is_spam     != True,
         ).scalar() or 0.0
 
-        net_spent = max(0.0, total_debits - total_credits)
+        # --- Persist to Budget.total_expenses ---
+        budget_entry = Budget.query.filter_by(month=month_str).first()
+        if budget_entry:
+            budget_entry.total_expenses = total_expenses
+            try:
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                print(f"⚠️  Could not persist total_expenses to Budget: {e}")
+
+        print(f"💰 [{month_str}] debits={total_debits:.2f}  credits={total_credits:.2f}  total_expenses={total_expenses:.2f}")
 
         return jsonify({
-            "month": dt.strftime("%Y-%m"),
-            "total_expense": net_spent,      # debits - credits, min 0
-            "total_debits": total_debits,
-            "total_credits": total_credits
+            "month":          month_str,
+            "total_expense":  total_expenses,   # net (debits − credits, min 0)
+            "total_debits":   total_debits,
+            "total_credits":  total_credits,
         }), 200
 
     except Exception as e:
         print(f"❌ Failed to get total expenses: {e}")
         return jsonify({"error": str(e)}), 500
+
+
 
 # -------------------------
 # SUMMARY ROUTES
