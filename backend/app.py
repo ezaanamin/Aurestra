@@ -935,23 +935,13 @@ def contribute_to_savings_goal(current_user, id):
 
 def calculate_month_expenses(year, month):
     """
-    Clean expense calculation for a given year/month.
+    Budget spent = sum of all debit transactions for the month.
 
-    Logic:
-      - Start at 0.
-      - Each debit transaction ADDS to the total.
-      - Each credit transaction REDUCES the total.
-      - Result is clamped to a minimum of 0 (can never be negative).
+    Credits (income like Salary, Bonus, refunds) are deliberately NOT
+    subtracted. A Rs 13,000 Bonus should never make your Rs 5,400
+    shopping spend look like Rs 0 on the budget bar.
 
-    Example:
-      Debit  100  → total = 100
-      Debit   50  → total = 150
-      Credit  30  → total = 120   ✅
-
-    Filters applied:
-      - is_deleted = False
-      - is_spam    = False
-      - categorization_status is NOT filtered (every real transaction counts)
+    Only debits represent actual spending.
     """
     transactions = Transaction.query.filter(
         extract('year',  Transaction.date) == year,
@@ -964,10 +954,10 @@ def calculate_month_expenses(year, month):
     for txn in transactions:
         if txn.type == 'debit':
             total += txn.amount
-        elif txn.type == 'credit':
-            total -= txn.amount
+        # credits are ignored — income is not subtracted from spending
 
-    return max(0.0, total)
+    return total   # always >= 0, debits can't be negative
+
 
 
 @app.route("/api/expenses/total", methods=["GET"])
