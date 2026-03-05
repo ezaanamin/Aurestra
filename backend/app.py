@@ -960,9 +960,11 @@ def get_total_expenses(current_user):
             Transaction.type == 'credit'
         ).scalar() or 0.0
 
+        net_spent = max(0.0, total_debits - total_credits)
+
         return jsonify({
             "month": dt.strftime("%Y-%m"),
-            "total_expense": total_debits,   # <-- budget spent = debits only
+            "total_expense": net_spent,      # debits - credits, min 0
             "total_debits": total_debits,
             "total_credits": total_credits
         }), 200
