@@ -34,6 +34,7 @@ const FullHistoryScreen = ({ navigation }) => {
     const [filterModalVisible, setFilterModalVisible] = useState(false);
     const [filterMonth, setFilterMonth] = useState(null); // 0-11
     const [filterYear, setFilterYear] = useState(null); // e.g. 2026
+    const [filterDay, setFilterDay] = useState(null); // e.g. 1-31
 
     const categories = useSelector((state) => state.API?.categories || []);
 
@@ -58,7 +59,7 @@ const FullHistoryScreen = ({ navigation }) => {
 
     useEffect(() => {
         applyFilters();
-    }, [data, searchText, sortBy, filterMonth, filterYear]);
+    }, [data, searchText, sortBy, filterMonth, filterYear, filterDay]);
 
     const applyFilters = () => {
         let filtered = [...data];
@@ -78,7 +79,11 @@ const FullHistoryScreen = ({ navigation }) => {
         if (filterMonth !== null && filterYear !== null) {
             filtered = filtered.filter(item => {
                 const itemDate = new Date(item.date);
-                return itemDate.getMonth() === filterMonth && itemDate.getFullYear() === filterYear;
+                const matchesMonthYear = itemDate.getMonth() === filterMonth && itemDate.getFullYear() === filterYear;
+                if (filterDay !== null) {
+                    return matchesMonthYear && itemDate.getDate() === filterDay;
+                }
+                return matchesMonthYear;
             });
         }
 
@@ -113,6 +118,7 @@ const FullHistoryScreen = ({ navigation }) => {
     const clearDateFilter = () => {
         setFilterMonth(null);
         setFilterYear(null);
+        setFilterDay(null);
         setFilterModalVisible(false);
     };
 
@@ -248,7 +254,9 @@ const FullHistoryScreen = ({ navigation }) => {
                 {filterMonth !== null && (
                     <View style={styles.activeFiltersRow}>
                         <View style={[styles.filterTag, { backgroundColor: colors.primary }]}>
-                            <Text style={styles.filterTagText}>{months[filterMonth]} {filterYear}</Text>
+                            <Text style={styles.filterTagText}>
+                                {filterDay ? `${filterDay} ` : ''}{months[filterMonth]} {filterYear}
+                            </Text>
                             <TouchableOpacity onPress={clearDateFilter}>
                                 <Ionicons name="close-circle" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
                             </TouchableOpacity>
@@ -363,7 +371,7 @@ const FullHistoryScreen = ({ navigation }) => {
                                         onPress={() => {
                                             setFilterMonth(index);
                                             if (!filterYear) setFilterYear(currentYear);
-                                            setFilterModalVisible(false);
+                                            // Don't close modal yet, allow picking a day if they want
                                         }}
                                     >
                                         <Text style={[
@@ -377,12 +385,56 @@ const FullHistoryScreen = ({ navigation }) => {
                                 ))}
                             </View>
 
-                            <TouchableOpacity
-                                style={[styles.clearFilterBtn, { borderColor: colors.border }]}
-                                onPress={clearDateFilter}
-                            >
-                                <Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Clear Filter</Text>
-                            </TouchableOpacity>
+                            {filterMonth !== null && (
+                                <>
+                                    <View style={[styles.separator, { backgroundColor: colors.border }]} />
+                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                        <Text style={{ color: colors.text, fontWeight: 'bold' }}>Specific Day (Optional)</Text>
+                                        <TouchableOpacity onPress={() => setFilterDay(null)}>
+                                            <Text style={{ color: colors.primary, fontSize: 12 }}>Clear Day</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                    <FlatList
+                                        data={Array.from({ length: 31 }, (_, i) => i + 1)}
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        keyExtractor={d => d.toString()}
+                                        renderItem={({ item }) => (
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.dayButton,
+                                                    filterDay === item && { backgroundColor: colors.primary }
+                                                ]}
+                                                onPress={() => {
+                                                    setFilterDay(item);
+                                                }}
+                                            >
+                                                <Text style={[
+                                                    styles.dayButtonText,
+                                                    { color: filterDay === item ? '#FFFFFF' : colors.text }
+                                                ]}>{item}</Text>
+                                            </TouchableOpacity>
+                                        )}
+                                        style={{ marginBottom: 20 }}
+                                    />
+                                </>
+                            )}
+
+                            <View style={{ flexDirection: 'row', gap: 12 }}>
+                                <TouchableOpacity
+                                    style={[styles.clearFilterBtn, { borderColor: colors.border, flex: 1 }]}
+                                    onPress={clearDateFilter}
+                                >
+                                    <Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Reset All</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={[styles.applyFilterBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
+                                    onPress={() => setFilterModalVisible(false)}
+                                >
+                                    <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Show Results</Text>
+                                </TouchableOpacity>
+                            </View>
                         </TouchableOpacity>
                     </TouchableOpacity>
                 </Modal>
@@ -746,7 +798,31 @@ const styles = StyleSheet.create({
         marginTop: 20,
         paddingVertical: 12,
         alignItems: 'center',
-        borderTopWidth: 1,
+        borderWidth: 1,
+        borderRadius: 12,
+    },
+    applyFilterBtn: {
+        marginTop: 20,
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderRadius: 12,
+    },
+    separator: {
+        height: 1,
+        marginVertical: 16,
+    },
+    dayButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.05)',
+    },
+    dayButtonText: {
+        fontSize: 14,
     }
 });
 
