@@ -268,19 +268,19 @@ const LoginScreen = ({ navigation }) => {
                 <View style={[
                   styles.googleButtonInner,
                   {
-                    backgroundColor: isDarkMode ? '#FFFFFF' : '#FFFFFF',
-                    borderColor: isDarkMode ? 'rgba(0, 0, 0, 0.1)' : 'rgba(0, 0, 0, 0.08)',
+                    backgroundColor: isDarkMode ? '#1E293B' : '#FFFFFF',
+                    borderColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
                   }
                 ]}>
                   {authStatus === 'loading' ? (
                     <View style={styles.loadingContainer}>
-                      <ActivityIndicator size="small" color="#1F2937" />
-                      <Text style={styles.googleButtonText}>Authenticating...</Text>
+                      <ActivityIndicator size="small" color={isDarkMode ? "#FFFFFF" : "#1F2937"} />
+                      <Text style={[styles.googleButtonText, { color: isDarkMode ? "#FFFFFF" : "#1F2937" }]}>Authenticating...</Text>
                     </View>
                   ) : (
                     <View style={styles.googleButtonContent}>
                       <Icon name="google" size={20} color="#DB4437" />
-                      <Text style={styles.googleButtonText}>Continue with Google</Text>
+                      <Text style={[styles.googleButtonText, { color: isDarkMode ? "#FFFFFF" : "#1F2937" }]}>Continue with Google</Text>
                     </View>
                   )}
                 </View>

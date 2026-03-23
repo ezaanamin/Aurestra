@@ -15,6 +15,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { fetchCategories, addCategory, deleteCategory, updateCategory } from '../API/slice/API';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSettings } from '../context/SettingsContext';
+import iconMap from '../utils/iconMap.json';
 
 const CategoryManagementScreen = ({ navigation }) => {
     const dispatch = useDispatch();
@@ -27,6 +28,7 @@ const CategoryManagementScreen = ({ navigation }) => {
     const [catType, setCatType] = useState('spending'); // 'spending' or 'income'
     const [isAdding, setIsAdding] = useState(false);
     const [editingCategory, setEditingCategory] = useState(null);
+    const [iconSearch, setIconSearch] = useState('');
 
     const colors_palette = [
         '#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B',
@@ -35,25 +37,64 @@ const CategoryManagementScreen = ({ navigation }) => {
     ];
 
     const icons = [
-        // Spending / General
-        'food', 'food-apple', 'coffee', 'hamburger', 'pizza', 'ice-cream', 'glass-wine',
-        'movie', 'video', 'music', 'controller', 'headphones',
-        'car', 'bus', 'airplane', 'train', 'taxi', 'bike', 'gas-station',
-        'shopping', 'cart', 'bag-personal', 'tag', 'ticket', 'gift',
-        'home', 'water', 'flash', 'receipt', 'phone', 'wifi', 'web',
-        'hospital', 'pill', 'bandage', 'doctor', 'tooth', 'glasses',
-        'school', 'book', 'palette', 'camera', 'microphone',
-        'dumbbell', 'run', 'soccer', 'basketball', 'tennis',
-        'sparkles', 'brain', 'heart', 'star', 'fire', 'human-greeting',
-        'dog', 'cat', 'tree', 'flower', 'weather-sunny',
-        'hammer', 'wrench', 'briefcase', 'office-building', 'factory',
-        'credit-card', 'bank', 'wallet', 'safe', 'piggy-bank', 'cash', 'cash-register',
-        'chart-arc', 'chart-line', 'chart-pie', 'trending-up', 'trending-down',
+        // Finance & Banking
+        'cash', 'bank', 'wallet', 'credit-card', 'account-cash', 'cash-register', 'piggy-bank', 'safe', 'calculator',
+        'trending-up', 'trending-down', 'chart-line', 'chart-pie', 'chart-arc', 'bank-transfer', 'bank-transfer-in', 'bank-transfer-out',
+        'currency-usd', 'currency-eur', 'currency-gbp', 'currency-inr', 'currency-cny', 'hand-coin', 'cash-plus', 'cash-minus',
+        'credit-card-outline', 'wallet-outline', 'bank-outline', 'finance', 'laptop-account', 'gift-outline', 'tag-text-outline', 'checkbook',
+        'stack-overflow', 'card-account-phone', 'at', 'account-check', 'badge-account-horizontal', 'account-tie', 'account-search',
 
-        // Income / Bonus
-        'bank-transfer-in', 'hand-coin', 'cash-plus', 'currency-usd', 'account-cash',
-        'rocket', 'diamond', 'crown', 'trophy'
+        // Action & Status
+        'plus', 'minus', 'check', 'close', 'alert', 'information', 'help', 'percent', 'tag', 'ticket', 'gift', 'star', 'heart',
+        'lightning-bolt', 'bell', 'bell-ring', 'shield', 'flag', 'calendar', 'clock', 'camera', 'microphone', 'headphones',
+        'link', 'magnify', 'map-marker', 'pin', 'send', 'share-variant', 'trash-can', 'pencil', 'content-save', 'cloud-upload',
+
+        // Shopping & Commerce
+        'cart', 'shopping', 'bag-personal', 'store', 'basket', 'barcode', 'tag-outline', 'sale', 'label',
+        'store-outline', 'basket-outline', 'cart-outline', 'shopping-outline', 'shopping-search', 'receipt', 'credit-card-refund',
+        'cart-minus', 'cart-plus', 'cart-remove', 'cart-variant', 'shopping-music',
+
+        // Food & Drink
+        'food', 'food-apple', 'hamburger', 'pizza', 'ice-cream', 'coffee', 'tea', 'glass-wine', 'glass-mug-variant', 'cup', 'bread-slice',
+        'silverware-fork-knife', 'bowl-mix', 'carrot', 'corn', 'egg', 'fruit-grapes', 'mushroom', 'peanut',
+        'cake', 'cake-variant', 'cookie', 'muffin', 'candy', 'candy-outline', 'cupcake', 'donut', 'fruit-cherries', 'fruit-citrus',
+        'fruit-pineapple', 'leaf', 'pot-steam', 'restaurant', 'stove', 'silverware', 'shaker', 'beer', 'glass-cocktail',
+
+        // Travel & Transport
+        'car', 'bus', 'train', 'airplane', 'taxi', 'bike', 'motorcycle', 'gas-station', 'navigation', 'map', 'earth', 'briefcase',
+        'car-outline', 'bus-outline', 'train-variant', 'airplane-landing', 'airplane-takeoff', 'rocket-launch', 'ship', 'subway',
+        'truck', 'van-utility', 'van-passenger', 'bicycle', 'scooter', 'anchor', 'ferry', 'pier', 'compass',
+
+        // Home & Utilities
+        'home', 'water', 'flash', 'fire', 'wifi', 'phone', 'receipt', 'web', 'laptop', 'television', 'air-filter', 'broom', 'lamp',
+        'bed', 'sofa', 'chair-rolling', 'coffee-maker', 'dishwasher', 'fridge', 'microwave', 'toaster', 'washing-machine',
+        'key', 'lock', 'door', 'window-closed', 'lightbulb', 'television-classic', 'printer', 'monitor', 'mouse', 'keyboard',
+
+        // Health & Wellness
+        'hospital', 'medical-bag', 'pill', 'bandage', 'doctor', 'tooth', 'glasses', 'dumbbell', 'run', 'soccer', 'basketball', 'tennis',
+        'yoga', 'meditation', 'brain', 'emoticon-happy', 'emoticon-sad',
+        'heart-pulse', 'thermometer', 'weight-lifter', 'pool', 'bike-fast', 'water-well', 'stethoscope', 'needle', 'bottle-tonic',
+        'dna', 'microscope', 'test-tube', 'human-female', 'human-male', 'human-child',
+
+        // Lifestyle & Hobbies
+        'palette', 'brush', 'palette-outline', 'drawing', 'controller-classic', 'gamepad-variant', 'poker-chip', 'cards', 'dice-5',
+        'bowling', 'pot-mix', 'music-note', 'guitar-acoustic', 'piano', 'violin', 'trumpet', 'drum', 'saxophone',
+        'camera-outline', 'video-outline', 'clapperboard', 'ticket-confirmation', 'theater', 'palette-swatch', 'camera-gopro',
+        'fishing', 'hiking', 'mountain', 'image-filter-hdr', 'nature-people', 'campfire', 'tent',
+
+        // Beauty & Fashion
+        'spray', 'perfume', 'lipstick', 'mirror', 'hair-dryer', 'face-woman', 'face-man', 'tshirt-crew', 'shoe-formal', 'shoe-heel',
+        'hanger', 'glasses-outline', 'watch-variant', 'necklace', 'ring', 'purse', 'shopping-outline', 'tshirt-v',
+
+        // Others
+        'dog', 'cat', 'tree', 'flower', 'weather-sunny', 'weather-night', 'cloud', 'umbrella', 'key', 'lock', 'shield-check',
+        'rocket', 'diamond', 'crown', 'trophy', 'human-greeting', 'baby-carriage', 'human-male-female', 'heart-outline',
+        'star-outline', 'thumb-up', 'thumb-down', 'robot', 'alien', 'ghost', 'halloween'
     ];
+
+    const filteredIcons = iconSearch.length > 0
+        ? iconMap.filter(icon => icon.toLowerCase().includes(iconSearch.toLowerCase()))
+        : icons;
 
     useEffect(() => {
         dispatch(fetchCategories());
@@ -102,6 +143,7 @@ const CategoryManagementScreen = ({ navigation }) => {
         setSelectedColor('#8B5CF6');
         setCatType('spending');
         setEditingCategory(null);
+        setIconSearch('');
         setModalVisible(false);
     };
 
@@ -220,9 +262,21 @@ const CategoryManagementScreen = ({ navigation }) => {
                         </View>
 
                         <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Icon & Color</Text>
+
+                        <View style={[styles.iconSearchContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                            <Icon name="magnify" size={20} color={colors.textSecondary} />
+                            <TextInput
+                                style={[styles.iconSearchInput, { color: colors.text }]}
+                                placeholder="Search icons..."
+                                placeholderTextColor={colors.textSecondary}
+                                value={iconSearch}
+                                onChangeText={setIconSearch}
+                            />
+                        </View>
+
                         <View style={{ height: 200, marginBottom: 10 }}>
                             <FlatList
-                                data={icons}
+                                data={filteredIcons}
                                 numColumns={6}
                                 renderItem={({ item }) => (
                                     <TouchableOpacity
@@ -237,6 +291,7 @@ const CategoryManagementScreen = ({ navigation }) => {
                                 )}
                                 keyExtractor={(item) => item}
                                 contentContainerStyle={{ gap: 8, paddingBottom: 10 }}
+                                ListEmptyComponent={<Text style={{ textAlign: 'center', marginTop: 20, color: colors.textSecondary }}>No icons found</Text>}
                             />
                         </View>
 
@@ -419,6 +474,21 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 3 },
         shadowOpacity: 0.27,
         shadowRadius: 4.65,
+    },
+    iconSearchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        marginBottom: 12,
+        height: 40,
+    },
+    iconSearchInput: {
+        flex: 1,
+        marginLeft: 8,
+        fontSize: 14,
+        padding: 0,
     },
 });
 

@@ -12,7 +12,8 @@ import {
     Modal
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
-import Ionicons from 'react-native-vector-icons/Ionicons'; // Switched to Ionicons
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import StatementModal from '../components/StatementModal';
 import { fetchAllTransactions, updateTransaction, fetchCategories } from '../API/slice/API'; // Added updateTransaction
@@ -27,10 +28,14 @@ const FullHistoryScreen = ({ navigation }) => {
     const [sortMenuVisible, setSortMenuVisible] = useState(false);
     const [sortBy, setSortBy] = useState('date_desc'); // date_desc, date_asc, amount_desc, amount_asc
 
-    // Edit specific state
     const [selectedTransaction, setSelectedTransaction] = useState(null);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showStatementModal, setShowStatementModal] = useState(false);
+    const [filterModalVisible, setFilterModalVisible] = useState(false);
+    const [filterMonth, setFilterMonth] = useState(null); // 0-11
+    const [filterYear, setFilterYear] = useState(null); // e.g. 2026
+
+    const categories = useSelector((state) => state.API?.categories || []);
 
     useEffect(() => {
         loadTransactions();
@@ -39,11 +44,10 @@ const FullHistoryScreen = ({ navigation }) => {
     const loadTransactions = async () => {
         setLoading(true);
         try {
-            dispatch(fetchCategories()); // Ensure categories are loaded for editing
+            dispatch(fetchCategories());
             const resultAction = await dispatch(fetchAllTransactions());
             if (fetchAllTransactions.fulfilled.match(resultAction)) {
                 setData(resultAction.payload);
-                setFilteredData(resultAction.payload);
             }
         } catch (e) {
             console.error(e);
@@ -52,70 +56,104 @@ const FullHistoryScreen = ({ navigation }) => {
         }
     };
 
-    const handleSort = (sortType) => {
-        setSortBy(sortType);
-        let sorted = [...filteredData];
-        switch (sortType) {
+    useEffect(() => {
+        applyFilters();
+    }, [data, searchText, sortBy, filterMonth, filterYear]);
+
+    const applyFilters = () => {
+        let filtered = [...data];
+
+        // 1. Text Search
+        if (searchText) {
+            const lower = searchText.toLowerCase();
+            filtered = filtered.filter(item =>
+                (item.purpose && item.purpose.toLowerCase().includes(lower)) ||
+                (item.sender && item.sender.toLowerCase().includes(lower)) ||
+                (item.notes && item.notes.toLowerCase().includes(lower)) ||
+                (String(item.amount).includes(lower))
+            );
+        }
+
+        // 2. Date Filter
+        if (filterMonth !== null && filterYear !== null) {
+            filtered = filtered.filter(item => {
+                const itemDate = new Date(item.date);
+                return itemDate.getMonth() === filterMonth && itemDate.getFullYear() === filterYear;
+            });
+        }
+
+        // 3. Sort
+        switch (sortBy) {
             case 'date_desc':
-                sorted.sort((a, b) => new Date(b.date) - new Date(a.date));
+                filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
                 break;
             case 'date_asc':
-                sorted.sort((a, b) => new Date(a.date) - new Date(b.date));
+                filtered.sort((a, b) => new Date(a.date) - new Date(b.date));
                 break;
             case 'amount_desc':
-                sorted.sort((a, b) => b.amount - a.amount);
+                filtered.sort((a, b) => b.amount - a.amount);
                 break;
             case 'amount_asc':
-                sorted.sort((a, b) => a.amount - b.amount);
+                filtered.sort((a, b) => a.amount - b.amount);
                 break;
         }
-        setFilteredData(sorted);
+
+        setFilteredData(filtered);
+    };
+
+    const handleSort = (sortType) => {
+        setSortBy(sortType);
         setSortMenuVisible(false);
     };
 
     const handleSearch = (text) => {
         setSearchText(text);
-        if (!text) {
-            setFilteredData(data);
-            handleSort(sortBy); // Re-apply sort
-            return;
-        }
-        const lower = text.toLowerCase();
-        const filtered = data.filter(item =>
-            (item.purpose && item.purpose.toLowerCase().includes(lower)) ||
-            (item.sender && item.sender.toLowerCase().includes(lower)) ||
-            (String(item.amount).includes(lower))
-        );
-        // Apply sort to filtered
-        let sorted = [...filtered];
-        // Re-use logic or just rely on next render if we extracted it, but inline for now:
-        if (sortBy === 'date_desc') sorted.sort((a, b) => new Date(b.date) - new Date(a.date));
-        if (sortBy === 'date_asc') sorted.sort((a, b) => new Date(a.date) - new Date(b.date));
-        if (sortBy === 'amount_desc') sorted.sort((a, b) => b.amount - a.amount);
-        if (sortBy === 'amount_asc') sorted.sort((a, b) => a.amount - b.amount);
-
-        setFilteredData(sorted);
     };
+
+    const clearDateFilter = () => {
+        setFilterMonth(null);
+        setFilterYear(null);
+        setFilterModalVisible(false);
+    };
+
+    const months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    const currentYear = new Date().getFullYear();
+    const years = [currentYear, currentYear - 1, currentYear - 2];
+
+
+    const [editCategory, setEditCategory] = useState('');
+    const [editNote, setEditNote] = useState('');
+    const [categorySearch, setCategorySearch] = useState('');
+
+    const filteredCategories = categories.filter(cat =>
+        cat.name.toLowerCase().includes(categorySearch.toLowerCase())
+    );
 
     const handleEdit = (item) => {
         setSelectedTransaction(item);
+        setEditCategory(item.purpose || '');
+        setEditNote(item.notes || '');
         setShowEditModal(true);
     };
 
-    const handleSaveEdit = async (category, note) => {
+    const handleSaveEdit = async () => {
         if (!selectedTransaction) return;
 
         try {
             await dispatch(updateTransaction({
                 id: selectedTransaction.id,
                 data: {
-                    purpose: category,
-                    notes: note
+                    purpose: editCategory,
+                    notes: editNote
                 }
             })).unwrap();
 
-            // Refresh list
-            loadTransactions();
+            // Refresh list but maintain search filter
+            loadTransactions(true);
             setShowEditModal(false);
             setSelectedTransaction(null);
         } catch (e) {
@@ -188,10 +226,35 @@ const FullHistoryScreen = ({ navigation }) => {
                         value={searchText}
                         onChangeText={handleSearch}
                     />
-                    <TouchableOpacity onPress={() => setSortMenuVisible(true)}>
-                        <Ionicons name="filter" size={20} color={colors.primary} />
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <TouchableOpacity
+                            onPress={() => setFilterModalVisible(true)}
+                            style={[
+                                styles.filterIconBadge,
+                                (filterMonth !== null) && { backgroundColor: colors.primary + '20' }
+                            ]}
+                        >
+                            <Ionicons
+                                name="calendar"
+                                size={20}
+                                color={(filterMonth !== null) ? colors.primary : colors.textSecondary}
+                            />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setSortMenuVisible(true)}>
+                            <Ionicons name="funnel" size={20} color={colors.primary} />
+                        </TouchableOpacity>
+                    </View>
                 </View>
+                {filterMonth !== null && (
+                    <View style={styles.activeFiltersRow}>
+                        <View style={[styles.filterTag, { backgroundColor: colors.primary }]}>
+                            <Text style={styles.filterTagText}>{months[filterMonth]} {filterYear}</Text>
+                            <TouchableOpacity onPress={clearDateFilter}>
+                                <Ionicons name="close-circle" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
             </LinearGradient>
 
             <View style={styles.content}>
@@ -254,6 +317,158 @@ const FullHistoryScreen = ({ navigation }) => {
                             ))}
                         </View>
                     </TouchableOpacity>
+                </Modal>
+
+                {/* Date Filter Modal */}
+                <Modal
+                    visible={filterModalVisible}
+                    transparent={true}
+                    animationType="fade"
+                    onRequestClose={() => setFilterModalVisible(false)}
+                >
+                    <TouchableOpacity
+                        style={styles.modalOverlay}
+                        activeOpacity={1}
+                        onPress={() => setFilterModalVisible(false)}
+                    >
+                        <TouchableOpacity activeOpacity={1} style={[styles.filterModalContent, { backgroundColor: colors.card }]}>
+                            <Text style={[styles.sortTitle, { color: colors.text }]}>Filter by Month</Text>
+
+                            <View style={styles.yearRow}>
+                                {years.map(y => (
+                                    <TouchableOpacity
+                                        key={y}
+                                        style={[
+                                            styles.yearButton,
+                                            filterYear === y && { backgroundColor: colors.primary }
+                                        ]}
+                                        onPress={() => setFilterYear(y)}
+                                    >
+                                        <Text style={[
+                                            styles.yearButtonText,
+                                            { color: filterYear === y ? '#FFFFFF' : colors.text }
+                                        ]}>{y}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <View style={styles.monthGrid}>
+                                {months.map((m, index) => (
+                                    <TouchableOpacity
+                                        key={m}
+                                        style={[
+                                            styles.monthButton,
+                                            filterMonth === index && { backgroundColor: colors.primary + '20', borderColor: colors.primary }
+                                        ]}
+                                        onPress={() => {
+                                            setFilterMonth(index);
+                                            if (!filterYear) setFilterYear(currentYear);
+                                            setFilterModalVisible(false);
+                                        }}
+                                    >
+                                        <Text style={[
+                                            styles.monthButtonText,
+                                            { color: colors.text },
+                                            filterMonth === index && { color: colors.primary, fontWeight: 'bold' }
+                                        ]}>
+                                            {m.substring(0, 3)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <TouchableOpacity
+                                style={[styles.clearFilterBtn, { borderColor: colors.border }]}
+                                onPress={clearDateFilter}
+                            >
+                                <Text style={{ color: '#EF4444', fontWeight: 'bold' }}>Clear Filter</Text>
+                            </TouchableOpacity>
+                        </TouchableOpacity>
+                    </TouchableOpacity>
+                </Modal>
+
+                {/* Edit Modal */}
+                <Modal
+                    visible={showEditModal}
+                    transparent={true}
+                    animationType="slide"
+                    onRequestClose={() => setShowEditModal(false)}
+                >
+                    <View style={styles.modalOverlay}>
+                        <View style={[styles.editModalContent, { backgroundColor: colors.card }]}>
+                            <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Transaction</Text>
+
+                            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Category</Text>
+                            <View style={[styles.categorySearchBox, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                                <Ionicons name="search" size={16} color={colors.textSecondary} />
+                                <TextInput
+                                    style={[styles.categorySearchInput, { color: colors.text }]}
+                                    value={categorySearch}
+                                    onChangeText={setCategorySearch}
+                                    placeholder="Search categories..."
+                                    placeholderTextColor={colors.textSecondary}
+                                />
+                            </View>
+
+                            <View style={styles.categoriesListContainer}>
+                                <FlatList
+                                    data={filteredCategories}
+                                    keyExtractor={(item) => item.id.toString()}
+                                    nestedScrollEnabled={true}
+                                    renderItem={({ item }) => (
+                                        <TouchableOpacity
+                                            style={[
+                                                styles.verticalCategoryItem,
+                                                { backgroundColor: editCategory === item.name ? (colors.primary + '20') : 'transparent' },
+                                                editCategory === item.name && { borderLeftWidth: 4, borderLeftColor: colors.primary }
+                                            ]}
+                                            onPress={() => setEditCategory(item.name)}
+                                        >
+                                            <View style={[styles.categoryIconCircle, { backgroundColor: item.color + '15' }]}>
+                                                <Icon name={item.icon || 'tag'} size={18} color={item.color || colors.primary} />
+                                            </View>
+                                            <Text style={[
+                                                styles.verticalCategoryText,
+                                                { color: editCategory === item.name ? colors.primary : colors.text },
+                                                editCategory === item.name && { fontWeight: '700' }
+                                            ]}>
+                                                {item.name}
+                                            </Text>
+                                            {editCategory === item.name && (
+                                                <Ionicons name="checkmark-circle" size={20} color={colors.primary} style={{ marginLeft: 'auto' }} />
+                                            )}
+                                        </TouchableOpacity>
+                                    )}
+                                    contentContainerStyle={{ paddingBottom: 10 }}
+                                />
+                            </View>
+
+                            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Notes</Text>
+                            <TextInput
+                                style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border, height: 80 }]}
+                                value={editNote}
+                                onChangeText={setEditNote}
+                                placeholder="Notes"
+                                placeholderTextColor={colors.textSecondary}
+                                multiline
+                            />
+
+                            <View style={styles.modalButtonsGroup}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, { backgroundColor: colors.border }]}
+                                    onPress={() => setShowEditModal(false)}
+                                >
+                                    <Text style={[styles.modalButtonText, { color: colors.text }]}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, { backgroundColor: colors.primary }]}
+                                    onPress={handleSaveEdit}
+                                >
+                                    <Text style={[styles.modalButtonText, { color: '#FFFFFF' }]}>Save</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </View>
                 </Modal>
 
                 {/* Statement Modal */}
@@ -384,6 +599,154 @@ const styles = StyleSheet.create({
     },
     sortOptionText: {
         fontSize: 16,
+    },
+    editModalContent: {
+        width: '90%',
+        borderRadius: 20,
+        padding: 20,
+        elevation: 10,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: 20,
+        textAlign: 'center',
+    },
+    inputLabel: {
+        fontSize: 14,
+        marginBottom: 8,
+        fontWeight: '600',
+    },
+    modalInput: {
+        borderRadius: 12,
+        borderWidth: 1,
+        padding: 12,
+        fontSize: 16,
+        marginBottom: 20,
+        textAlignVertical: 'top',
+    },
+    modalButtonsGroup: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    modalButton: {
+        flex: 1,
+        padding: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+    },
+    modalButtonText: {
+        fontWeight: 'bold',
+        fontSize: 16,
+    },
+    categoriesListContainer: {
+        marginBottom: 20,
+        maxHeight: 200, // Limit height since it's now vertical
+        borderWidth: 1,
+        borderColor: '#E2E8F0',
+        borderRadius: 12,
+        padding: 4,
+    },
+    categorySearchBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+        borderRadius: 10,
+        borderWidth: 1,
+        marginBottom: 10,
+        height: 36,
+    },
+    categorySearchInput: {
+        flex: 1,
+        marginLeft: 8,
+        fontSize: 14,
+        padding: 0,
+    },
+    verticalCategoryItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 4,
+    },
+    categoryIconCircle: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    verticalCategoryText: {
+        fontSize: 15,
+        fontWeight: '500',
+    },
+    filterIconBadge: {
+        padding: 6,
+        borderRadius: 8,
+    },
+    activeFiltersRow: {
+        flexDirection: 'row',
+        paddingHorizontal: 20,
+        marginTop: 12,
+    },
+    filterTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 4,
+        paddingHorizontal: 12,
+        borderRadius: 20,
+    },
+    filterTagText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    filterModalContent: {
+        width: '85%',
+        borderRadius: 20,
+        padding: 20,
+        elevation: 10,
+    },
+    yearRow: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 12,
+        marginBottom: 20,
+    },
+    yearButton: {
+        paddingVertical: 6,
+        paddingHorizontal: 16,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.1)',
+    },
+    yearButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    monthGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    monthButton: {
+        width: '30%',
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    monthButtonText: {
+        fontSize: 14,
+    },
+    clearFilterBtn: {
+        marginTop: 20,
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderTopWidth: 1,
     }
 });
 
