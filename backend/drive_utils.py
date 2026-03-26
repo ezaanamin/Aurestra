@@ -14,7 +14,10 @@ from email.mime.multipart import MIMEMultipart
 # SCOPES must match what we requested in frontend
 # SCOPES must match what we requested in frontend
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
-GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+GMAIL_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify'
+]
 
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'encryption_key.key')
 
@@ -318,3 +321,57 @@ def send_gmail_message(service, user_id, message):
     except Exception as error:
         print(f'❌ An error occurred sending email: {error}')
         return None
+
+def list_gmail_messages(service, query=''):
+    """List all Messages of the user's mailbox matching the query."""
+    try:
+        response = service.users().messages().list(userId='me', q=query).execute()
+        messages = []
+        if 'messages' in response:
+            messages.extend(response['messages'])
+
+        while 'nextPageToken' in response:
+            page_token = response['nextPageToken']
+            response = service.users().messages().list(userId='me', q=query, pageToken=page_token).execute()
+            messages.extend(response['messages'])
+
+        return messages
+    except Exception as error:
+        print(f'❌ An error occurred listing emails: {error}')
+        return []
+
+def delete_gmail_messages(service, message_ids):
+    """Batch delete messages by IDs."""
+    if not message_ids:
+        return True
+    try:
+        # Gmail API batchDelete has a limit of 1000 messages
+        for i in range(0, len(message_ids), 1000):
+            batch = message_ids[i:i+1000]
+            service.users().messages().batchDelete(
+                userId='me',
+                body={'ids': batch}
+            ).execute()
+        return True
+    except Exception as error:
+        print(f'❌ An error occurred deleting emails: {error}')
+        return False
+
+def list_drive_files_in_folder(service, folder_id):
+    """Lists all files in a specific Drive folder."""
+    query = f"'{folder_id}' in parents and trashed=false"
+    try:
+        results = service.files().list(q=query, fields='files(id, name)').execute()
+        return results.get('files', [])
+    except Exception as e:
+        print(f"❌ List Drive files error: {e}")
+        return []
+
+def delete_drive_file(service, file_id):
+    """Deletes a file from Drive."""
+    try:
+        service.files().delete(fileId=file_id).execute()
+        return True
+    except Exception as e:
+        print(f"❌ Delete Drive file error: {e}")
+        return False

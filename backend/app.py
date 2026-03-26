@@ -34,6 +34,7 @@ from google.auth.transport import requests
 from google_auth_oauthlib.flow import Flow
 from database import db, app
 from sqlalchemy import text
+from flask_apscheduler import APScheduler
 
 
 # Config is already loaded in database.py
@@ -45,6 +46,24 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or 'default_dev_secret_change
 # Register AI Agent API Blueprint
 from ai_agent_api import ai_agent_bp
 app.register_blueprint(ai_agent_bp)
+
+# -------------------------
+# SCHEDULER (Daily Cleanup)
+# -------------------------
+scheduler = APScheduler()
+scheduler.init_app(app)
+scheduler.start()
+
+@scheduler.task('cron', id='do_daily_cleanup', hour=0, minute=0)
+def do_daily_cleanup_job():
+    """Triggered every day at 12:00 AM (Midnight)"""
+    print("⏰ [Scheduler] Triggering midnight cleanup task...")
+    try:
+        from daily_cleanup import perform_daily_cleanup
+        perform_daily_cleanup()
+    except Exception as e:
+        print(f"❌ [Scheduler] Cleanup job failed: {e}")
+
 # Email Config (Gmail)
  
 
@@ -518,9 +537,10 @@ def profile(current_user):
     if request.method == "GET":
         with app.app_context():
             # Calculate stats
-            tx_count = Transaction.query.count()
+            tx_count = Transaction.query.filter_by(is_deleted=False).count()
             goals_count = SavingsGoal.query.count()
-            categories_count = db.session.query(func.count(func.distinct(Transaction.purpose))).scalar()
+            # Count actual defined categories, not just those used in transactions
+            categories_count = Category.query.count()
             
             user_data = current_user.to_dict()
             user_data['stats'] = {
