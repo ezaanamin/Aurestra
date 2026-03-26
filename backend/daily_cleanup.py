@@ -10,7 +10,8 @@ from drive_utils import (
     get_drive_service,
     ensure_folder_path,
     list_drive_files_in_folder,
-    delete_drive_file
+    delete_drive_file,
+    GMAIL_MODIFY_SCOPES
 )
 
 def perform_daily_cleanup():
@@ -32,7 +33,8 @@ def perform_daily_cleanup():
             
             # --- 1. Gmail Cleanup ---
             try:
-                gmail_service = get_gmail_service(admin_user)
+                # Use GMAIL_MODIFY_SCOPES to allow deletion
+                gmail_service = get_gmail_service(admin_user, scopes=GMAIL_MODIFY_SCOPES)
                 if gmail_service:
                     # Search for 'Aurestra' (and 'austrea' as per user typo)
                     # We search all folders ('all') by not specifying labelIds

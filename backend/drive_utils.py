@@ -11,10 +11,9 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# SCOPES must match what we requested in frontend
-# SCOPES must match what we requested in frontend
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
-GMAIL_SCOPES = [
+GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+GMAIL_MODIFY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.modify'
 ]
@@ -269,13 +268,16 @@ def upload_file_from_path(service, folder_id, filename, filepath, mimetype='appl
         print(f"❌ Upload File error: {e}")
         return False
 
-def get_gmail_service(user):
+def get_gmail_service(user, scopes=None):
     """
     Returns an authenticated Gmail API service for the given User.
     """
     if not user.google_refresh_token:
         # print(f"⚠️ User {user.email} has no refresh token.")
         return None
+
+    if scopes is None:
+        scopes = GMAIL_SCOPES
 
     try:
         creds = Credentials(
@@ -284,7 +286,7 @@ def get_gmail_service(user):
             token_uri="https://oauth2.googleapis.com/token",
             client_id=os.getenv('GOOGLE_WEB_CLIENT_ID'),
             client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
-            scopes=GMAIL_SCOPES
+            scopes=scopes
         )
 
         creds.refresh(Request())
