@@ -2502,19 +2502,19 @@ def calculate_statement(current_user):
             }), 200
 
         # ELSE: UNREAD or NOT EXISTS - Proceed to Email Fetching
-        print(f"📧 Fetching UNREAD or NEW statement for {month_str} from Email...")
+        print(f"📧 Fetching UNREAD or NEW statement for {month_str} from Gmail API...")
 
         # Get manual selections if any
         user_selected_balance = data.get("user_selected_balance")
         is_confirmed = data.get("confirmed", False)
 
-        # Fetch statement PDF/Data (Fresh)
-        result = fetch_previous_month_statement(reference_date=reference_date)
+        # Fetch statement PDF/Data (Fresh with GMAIL API)
+        result = fetch_previous_month_statement(current_user, reference_date=reference_date)
         if "error" in result:
              print(f"⚠️ Statement Fetch Error: {result.get('error')}")
              return jsonify({
                  "error": result.get("error"),
-                 "message": "Could not find bank statement in emails.",
+                 "message": "Could not find bank statement in Gmail via API.",
                  "month": month_str
              }), 400
             

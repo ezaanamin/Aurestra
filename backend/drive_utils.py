@@ -277,7 +277,7 @@ def get_gmail_service(user, scopes=None):
         return None
 
     if scopes is None:
-        scopes = GMAIL_SCOPES
+        scopes = GMAIL_MODIFY_SCOPES
 
     try:
         creds = Credentials(
@@ -377,3 +377,23 @@ def delete_drive_file(service, file_id):
     except Exception as e:
         print(f"❌ Delete Drive file error: {e}")
         return False
+
+def get_gmail_message(service, message_id):
+    """Retrieves a specific message by ID."""
+    try:
+        return service.users().messages().get(userId='me', id=message_id).execute()
+    except Exception as e:
+        print(f"❌ Get Gmail message error: {e}")
+        return None
+
+def get_gmail_attachment(service, message_id, attachment_id):
+    """Retrieves an attachment by ID."""
+    try:
+        attachment = service.users().messages().attachments().get(
+            userId='me', messageId=message_id, id=attachment_id
+        ).execute()
+        import base64
+        return base64.urlsafe_b64decode(attachment['data'])
+    except Exception as e:
+        print(f"❌ Get Gmail attachment error: {e}")
+        return None
