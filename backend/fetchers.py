@@ -59,14 +59,15 @@ def decode_mime_words(s):
 
 
 
-# -------------------------
-# FETCH LATEST BANK EMAIL
-# -------------------------
 def fetch_latest_bank_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        print(f"📧 Connecting to IMAP as: {BANK_EMAIL_ACCOUNT}")
-        mail.login(BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD)
+        # Sanity check for credentials
+        email = BANK_EMAIL_ACCOUNT.strip()
+        pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
+        
+        print(f"📧 Connecting to IMAP as: {email}")
+        mail.login(email, pwd)
         mail.select("inbox")
 
         search_date = get_search_date()
@@ -514,8 +515,13 @@ def fetch_previous_month_statement(reference_date=None):
     """
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        print(f"📧 Connecting to IMAP as: {BANK_EMAIL_ACCOUNT}")
-        mail.login(BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD)
+        
+        # Absolute Sanitization check before login
+        email = BANK_EMAIL_ACCOUNT.strip()
+        pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
+        
+        print(f"📧 Connecting to IMAP as: {email} | PassLen: {len(pwd)}")
+        mail.login(email, pwd)
         mail.select("inbox")
 
         # Calculate Date Range for Previous Month
