@@ -13,9 +13,14 @@ from email.mime.multipart import MIMEMultipart
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+GMAIL_READONLY_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly'
+]
 GMAIL_MODIFY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.modify'
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.readonly'
 ]
 
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'encryption_key.key')
@@ -277,7 +282,7 @@ def get_gmail_service(user, scopes=None):
         return None
 
     if scopes is None:
-        scopes = GMAIL_MODIFY_SCOPES
+        scopes = GMAIL_READONLY_SCOPES
 
     try:
         creds = Credentials(
