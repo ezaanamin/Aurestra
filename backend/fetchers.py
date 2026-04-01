@@ -61,13 +61,22 @@ def decode_mime_words(s):
 
 def fetch_latest_bank_email():
     try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        
+        from config import BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD
+        
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
         # Sanity check for credentials
-        email_addr = BANK_EMAIL_ACCOUNT.strip()
-        pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
+        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
+        pwd = str(BANK_APP_PASSWORD).replace(" ", "").strip()
         
-        print(f"📧 Connecting to IMAP as: {email_addr}")
-        mail.login(email_addr, pwd)
+        if "ezean" in imap_user:
+            print(f"⚠️  TYPO DETECTED (fetch_latest): [{imap_user}] -> correcting to [ezaan.amin@gmail.com]")
+            imap_user = "ezaan.amin@gmail.com"
+            
+        print(f"📧 Connecting to IMAP as: {imap_user}")
+        mail.login(imap_user, pwd)
         mail.select("inbox")
 
         search_date = get_search_date()
@@ -237,8 +246,17 @@ def fetch_latest_bank_email():
 # -------------------------
 def fetch_latest_wallet_email():
     try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        from config import BANK_EMAIL_ACCOUNT, WALLET_APP_PASSWORD, IMAP_HOST
+        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
+        pwd = str(WALLET_APP_PASSWORD).replace(" ", "").strip()
+        if "ezean" in imap_user:
+            imap_user = "ezaan.amin@gmail.com"
+            
+        print(f"📧 Connecting to IMAP (Wallet) as: {imap_user}")
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        mail.login(BANK_EMAIL_ACCOUNT, WALLET_APP_PASSWORD)
+        mail.login(imap_user, pwd)
         mail.select("inbox")
 
         search_date = get_search_date()
@@ -382,8 +400,15 @@ def fetch_and_save_easypaisa_emails():
     Prevents duplicates using transaction_id.
     """
     try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        from config import BANK_EMAIL_ACCOUNT, APP_PASSWORD
+        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
+        pwd = str(APP_PASSWORD).replace(" ", "").strip()
+        if "ezean" in imap_user:
+             imap_user = "ezaan.amin@gmail.com"
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        mail.login(BANK_EMAIL_ACCOUNT, APP_PASSWORD)
+        mail.login(imap_user, pwd)
         mail.select("inbox")
 
         status, data = mail.search(None, '(UNSEEN FROM "amin.ezaan@gmail.com")')
@@ -514,14 +539,23 @@ def fetch_previous_month_statement(reference_date=None):
                                    To fetch Nov 2025, pass a date in Dec 2025 (e.g. Dec 10).
     """
     try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        
+        from config import BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD
+        
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
         
         # Absolute Sanitization check before login
-        email_addr = BANK_EMAIL_ACCOUNT.strip()
-        pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
+        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
+        pwd = str(BANK_APP_PASSWORD).replace(" ", "").strip()
         
-        print(f"📧 Connecting to IMAP as: {email_addr} | PassLen: {len(pwd)}")
-        mail.login(email_addr, pwd)
+        if "ezean" in imap_user:
+            print(f"⚠️  TYPO DETECTED: [{imap_user}] -> correcting to [ezaan.amin@gmail.com]")
+            imap_user = "ezaan.amin@gmail.com"
+            
+        print(f"📧 Connecting to IMAP as: {imap_user} | PassLen: {len(pwd)}")
+        mail.login(imap_user, pwd)
         mail.select("inbox")
 
         # Calculate Date Range for Previous Month
@@ -537,9 +571,10 @@ def fetch_previous_month_statement(reference_date=None):
         limit_start_date = last_month.replace(day=20) # Go back even further in filter
         limit_end_date = today + timedelta(days=5) # Allow slightly in the future (relative to ref date)
         
-        print(f"🔍 IMAP Search: SINCE {broad_since}")
-        # Broad Search: Just SINCE broad_since to avoid index issues with too many filters
-        status, data = mail.search(None, f'SINCE "{broad_since}"')
+        from config import BANK_SENDER
+        print(f"🔍 IMAP Search: FROM \"{BANK_SENDER}\" SINCE {broad_since}")
+        # Optimized Search: Use both FROM and SINCE to reduce result set
+        status, data = mail.search(None, f'FROM "{BANK_SENDER}" SINCE "{broad_since}"')
 
         if status != "OK" or not data[0]:
             mail.logout()
@@ -554,8 +589,9 @@ def fetch_previous_month_statement(reference_date=None):
         merged_transactions = []
         month_name = last_month.strftime("%B %Y")
         
-        for e_id in email_ids:
+        for idx, e_id in enumerate(email_ids):
             try:
+                print(f"📧 [Fetch] Processing candidate {idx+1}/{len(email_ids)} (ID: {e_id.decode()})")
                 # 1. HEADER FETCH & FILTER
                 # ------------------------
                 _, head_data = mail.fetch(e_id, '(BODY.PEEK[HEADER])')

@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 def test_imap():
     load_dotenv(override=True)
     
-    email = os.getenv("BANK_EMAIL_ACCOUNT", "ezaan.amin@gmail.com").strip()
+    email = os.getenv("BANK_EMAIL_ACCOUNT", "amin.ezaan@gmail.com").strip()
     raw_pass = os.getenv("APP_PASSWORD", "")
     clean_pass = raw_pass.replace(" ", "").strip()
     host = os.getenv("IMAP_HOST", "imap.gmail.com")
