@@ -63,11 +63,11 @@ def fetch_latest_bank_email():
     try:
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
         # Sanity check for credentials
-        email = BANK_EMAIL_ACCOUNT.strip()
+        email_addr = BANK_EMAIL_ACCOUNT.strip()
         pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
         
-        print(f"📧 Connecting to IMAP as: {email}")
-        mail.login(email, pwd)
+        print(f"📧 Connecting to IMAP as: {email_addr}")
+        mail.login(email_addr, pwd)
         mail.select("inbox")
 
         search_date = get_search_date()
@@ -517,11 +517,11 @@ def fetch_previous_month_statement(reference_date=None):
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
         
         # Absolute Sanitization check before login
-        email = BANK_EMAIL_ACCOUNT.strip()
+        email_addr = BANK_EMAIL_ACCOUNT.strip()
         pwd = BANK_APP_PASSWORD.replace(" ", "").strip()
         
-        print(f"📧 Connecting to IMAP as: {email} | PassLen: {len(pwd)}")
-        mail.login(email, pwd)
+        print(f"📧 Connecting to IMAP as: {email_addr} | PassLen: {len(pwd)}")
+        mail.login(email_addr, pwd)
         mail.select("inbox")
 
         # Calculate Date Range for Previous Month
