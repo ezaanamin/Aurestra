@@ -209,6 +209,9 @@ def fetch_previous_month_statement(reference_date=None):
     """
     try:
         from dotenv import load_dotenv
+        print(f"📁 [Fetch] Current CWD: {os.getcwd()}")
+        env_path = os.path.abspath(".env")
+        print(f"📄 [Fetch] Looking for .env at: {env_path} | Exists: {os.path.exists(env_path)}")
         load_dotenv(override=True)
         
         from config import BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD, BANK_PDF_PASSWORD, TARGET_ACCOUNT_NUMBER, IGNORE_ACCOUNT_NUMBER, BANK_SENDER
