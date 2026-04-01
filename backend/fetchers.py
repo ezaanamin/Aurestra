@@ -523,18 +523,17 @@ def fetch_previous_month_statement(reference_date=None):
         first = today.replace(day=1)
         last_month = first - timedelta(days=1)
         
-        # SEARCH LOGIC UPDATE: Broad SINCE, then Python Filter
-        # This fixes 404s caused by strict/unsupported 'BEFORE' IMAP queries.
+        # SEARCH LOGIC UPDATE: Broad SINCE (60 days), then Python Filter
+        # This fixes 404s caused by strict/unsupported 'BEFORE' IMAP queries and narrow SINCE ranges.
+        broad_since = (today - timedelta(days=60)).strftime("%d-%b-%Y")
         
-        # Search from start of PREVIOUS month (Nov 1) to be safe
-        broad_since = last_month.replace(day=1).strftime("%d-%b-%Y")
+        # Exact Target Window Filtering logic remains correct
+        limit_start_date = last_month.replace(day=20) # Go back even further in filter
+        limit_end_date = today + timedelta(days=5) # Allow slightly in the future (relative to ref date)
         
-        # Exact Target Window: e.g. Nov 25 to Dec 25
-        limit_start_date = last_month.replace(day=25)
-        limit_end_date = today.replace(day=1) + timedelta(days=25)
-        
-        print(f"🔍 IMAP Broad Search: SINCE {broad_since}")
-        status, data = mail.search(None, f'FROM "{BANK_SENDER}" SINCE "{broad_since}"')
+        print(f"🔍 IMAP Search: SINCE {broad_since}")
+        # Broad Search: Just SINCE broad_since to avoid index issues with too many filters
+        status, data = mail.search(None, f'SINCE "{broad_since}"')
 
         if status != "OK" or not data[0]:
             mail.logout()
@@ -573,8 +572,17 @@ def fetch_previous_month_statement(reference_date=None):
                 
                 # Check Subject
                 subj = decode_mime_words(msg_head.get("Subject", ""))
+                sender_full = decode_mime_words(msg_head.get("From", ""))
+                
+                print(f"📧 Peek Level 1: {email_dt.date()} | {subj} (From: {sender_full[:30]}...)")
+                
                 if "statement" not in subj.lower():
                     continue
+                    
+                # If specific sender is configured, check it (Substring match)
+                if BANK_SENDER and BANK_SENDER.lower() not in sender_full.lower():
+                     print(f"⏭️ Skipping email — Not from target sender {BANK_SENDER}")
+                     continue
 
                 print(f"✅ Found Valid Email! Date: {email_dt.date()} | Subject: {subj}")
                 

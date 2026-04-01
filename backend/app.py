@@ -2513,7 +2513,12 @@ def calculate_statement(current_user):
         # Fetch statement PDF/Data (Fresh)
         result = fetch_previous_month_statement(reference_date=reference_date)
         if "error" in result:
-            return jsonify(result), 404
+             print(f"⚠️ Statement Fetch Error: {result.get('error')}")
+             return jsonify({
+                 "error": result.get("error"),
+                 "message": "Could not find bank statement in emails.",
+                 "month": month_str
+             }), 400
             
         # 🛡️ MANUAL SELECTION CHECK
         # If we have a balance table and user hasn't confirmed yet, return it for selection
