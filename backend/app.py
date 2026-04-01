@@ -1,6 +1,6 @@
 from flask import jsonify, request
 import hashlib
-from fetchers import fetch_latest_bank_email, fetch_latest_wallet_email
+from fetchers import fetch_latest_bank_email
 from database import app, db  # Import app from database.py
 from model import MonthlyBalance, Transaction, Budget, AccountBalance, SavingsGoal, Category, SMSHistory, FinancialInsight
 from datetime import datetime, date, timedelta
@@ -12,8 +12,6 @@ from werkzeug.utils import secure_filename
 from time import time
 from fetchers import (
     fetch_latest_bank_email,
-    fetch_latest_wallet_email,
-    fetch_and_save_easypaisa_emails,
     calculate_combined_summary
 )
 from drive_utils import get_drive_service, ensure_folder_path, upload_json, get_gmail_service, create_message, send_gmail_message
