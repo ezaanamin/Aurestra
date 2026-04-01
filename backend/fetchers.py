@@ -46,8 +46,6 @@ def safe_float(val):
         return 0.0
 
 # -------------------------
-# FETCH LATEST BANK EMAIL
-# -------------------------
 def fetch_latest_bank_email():
     """
     Scans recent emails for bank statements and calculates current flow.
@@ -65,6 +63,10 @@ def fetch_latest_bank_email():
             imap_user = "ezaan.amin@gmail.com"
             
         print(f"📧 [Fetch Latest] Connecting as: {imap_user}")
+        print(f"   Pwd Length: {len(pwd)}")
+        if len(pwd) > 0:
+            print(f"   Pwd Starts: {pwd[0]}... Ends: {pwd[-1]}")
+            
         mail.login(imap_user, pwd)
         mail.select("inbox")
 
@@ -216,14 +218,18 @@ def fetch_previous_month_statement(reference_date=None):
         
         from config import BANK_EMAIL_ACCOUNT, BANK_APP_PASSWORD, BANK_PDF_PASSWORD, TARGET_ACCOUNT_NUMBER, IGNORE_ACCOUNT_NUMBER, BANK_SENDER
         
+        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
+        pwd = str(BANK_APP_PASSWORD).replace(" ", "").strip()
+        
         print(f"📋 [Fetch] Detailed Config Check:")
-        print(f"   Account: {BANK_EMAIL_ACCOUNT}")
+        print(f"   Account: {imap_user}")
+        print(f"   Pwd Length: {len(pwd)}")
+        if len(pwd) > 0:
+            print(f"   Pwd Starts: {pwd[0]}... Ends: {pwd[-1]}")
         print(f"   Target Acct: {TARGET_ACCOUNT_NUMBER}")
         print(f"   PDF Pass: {'Set' if BANK_PDF_PASSWORD else 'Missing'}")
         
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
-        imap_user = str(BANK_EMAIL_ACCOUNT).strip()
-        pwd = str(BANK_APP_PASSWORD).replace(" ", "").strip()
         
         if "ezean" in imap_user:
             print(f"⚠️  [Fetch] TYPO DETECTED: Correcting to [ezaan.amin@gmail.com]")
