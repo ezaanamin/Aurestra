@@ -368,7 +368,7 @@ def list_drive_files_in_folder(service, folder_id):
     """Lists all files in a specific Drive folder."""
     query = f"'{folder_id}' in parents and trashed=false"
     try:
-        results = service.files().list(q=query, fields='files(id, name)').execute()
+        results = service.files().list(q=query, fields='files(id, name, createdTime)').execute()
         return results.get('files', [])
     except Exception as e:
         print(f"❌ List Drive files error: {e}")
