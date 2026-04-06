@@ -14,7 +14,16 @@ from fetchers import (
     fetch_latest_bank_email,
     calculate_combined_summary
 )
-from drive_utils import get_drive_service, ensure_folder_path, upload_json, get_gmail_service, create_message, send_gmail_message
+from drive_utils import (
+    get_drive_service,
+    ensure_folder_path,
+    upload_json,
+    get_gmail_service,
+    create_message,
+    send_gmail_message,
+    SCOPES as DRIVE_SCOPES,
+    GMAIL_READONLY_SCOPES,
+)
 from fcm_utils import send_push_to_all
 from sqlalchemy import func, desc, extract, case
 from sms_parser import process_bank_sms, BankAlhabibSMSParser, generate_sms_hash, generate_transaction_hash
@@ -425,8 +434,10 @@ def google_login():
         if server_auth_code:
             try:
                 # Exchange auth code for credentials
-                client_id = os.getenv('GOOGLE_WEB_CLIENT_ID')
-                client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+                client_id = os.getenv('GOOGLE_WEB_CLIENT_ID') or os.getenv('GOOGLE_CLIENT_ID')
+                client_secret = os.getenv('GOOGLE_CLIENT_SECRET') or os.getenv('GOOGLE_WEB_CLIENT_SECRET')
+                if not client_id or not client_secret:
+                    raise ValueError("Missing Google OAuth client credentials in environment variables.")
                 
                 print(f"DEBUG: Client ID Prefix: {client_id[:5] if client_id else 'None'}...")
                 print(f"DEBUG: Client Secret Prefix: {client_secret[:3] if client_secret else 'None'}...")
@@ -442,14 +453,7 @@ def google_login():
                 
                 flow = Flow.from_client_config(
                     client_config,
-                    scopes=[
-                        'https://www.googleapis.com/auth/drive.file',
-                        'openid',
-                        'https://www.googleapis.com/auth/userinfo.email',
-                        'https://www.googleapis.com/auth/userinfo.profile',
-                        'https://www.googleapis.com/auth/gmail.send',
-                        'https://www.googleapis.com/auth/gmail.readonly'
-                    ],
+                    scopes=DRIVE_SCOPES + GMAIL_READONLY_SCOPES,
                     redirect_uri=''
                 )
                 

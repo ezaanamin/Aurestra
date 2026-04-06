@@ -23,6 +23,14 @@ GMAIL_MODIFY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly'
 ]
 
+def _get_google_client_id():
+    """Return Google OAuth client ID from supported env names."""
+    return os.getenv('GOOGLE_WEB_CLIENT_ID') or os.getenv('GOOGLE_CLIENT_ID')
+
+def _get_google_client_secret():
+    """Return Google OAuth client secret from supported env names."""
+    return os.getenv('GOOGLE_CLIENT_SECRET') or os.getenv('GOOGLE_WEB_CLIENT_SECRET')
+
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'encryption_key.key')
 
 def load_or_generate_key():
@@ -66,13 +74,19 @@ def get_drive_service(user):
         return None
 
     try:
+        client_id = _get_google_client_id()
+        client_secret = _get_google_client_secret()
+        if not client_id or not client_secret:
+            print("❌ Drive auth not configured: missing client ID/secret.")
+            return None
+
         # Build Credentials object
         creds = Credentials(
             token=None, # We don't have a current access token, only refresh
             refresh_token=user.google_refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv('GOOGLE_WEB_CLIENT_ID'),
-            client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+            client_id=client_id,
+            client_secret=client_secret,
             scopes=SCOPES
         )
 
@@ -285,12 +299,18 @@ def get_gmail_service(user, scopes=None):
         scopes = GMAIL_READONLY_SCOPES
 
     try:
+        client_id = _get_google_client_id()
+        client_secret = _get_google_client_secret()
+        if not client_id or not client_secret:
+            print("❌ Gmail auth not configured: missing client ID/secret.")
+            return None
+
         creds = Credentials(
             token=None,
             refresh_token=user.google_refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv('GOOGLE_WEB_CLIENT_ID'),
-            client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+            client_id=client_id,
+            client_secret=client_secret,
             scopes=scopes
         )
 
