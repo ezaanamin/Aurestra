@@ -25,12 +25,14 @@ GoogleSignin.configure({
   webClientId: Config.GOOGLE_WEB_CLIENT_ID,
   offlineAccess: true,
   forceCodeForRefreshToken: true,
+  // Must match backend drive_utils.GOOGLE_SIGNIN_OAUTH_SCOPES (server auth code exchange).
   scopes: [
+    'openid',
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.readonly'
+    'https://www.googleapis.com/auth/gmail.readonly',
   ],
 });
 

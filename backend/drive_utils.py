@@ -3,6 +3,7 @@ import io
 import json
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from datetime import datetime
@@ -17,6 +18,17 @@ GMAIL_READONLY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.readonly'
 ]
+
+# Must match Aurestra/index.js GoogleSignin.configure({ scopes }) exactly (order + strings).
+# Used for server auth code exchange and refresh; mismatch causes "Scope has changed" errors.
+GOOGLE_SIGNIN_OAUTH_SCOPES = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly',
+]
 GMAIL_MODIFY_SCOPES = [
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.modify',
@@ -30,6 +42,28 @@ def _get_google_client_id():
 def _get_google_client_secret():
     """Return Google OAuth client secret from supported env names."""
     return os.getenv('GOOGLE_CLIENT_SECRET') or os.getenv('GOOGLE_WEB_CLIENT_SECRET')
+
+def _clear_google_refresh_token_if_invalid_grant(user, error):
+    """
+    If Google returns invalid_grant, the stored refresh token is unusable (revoked, expired,
+    wrong OAuth client, or password events). Clear it so the next login can store a new one.
+    """
+    err = str(error).lower()
+    if 'invalid_grant' not in err:
+        return False
+    try:
+        from database import db
+        user.google_refresh_token = None
+        db.session.commit()
+        email = getattr(user, 'email', None) or '?'
+        print(
+            f"⚠️ Google OAuth invalid_grant for {email}: refresh token cleared. "
+            "User must sign in with Google again (Settings → sign out, or reinstall session)."
+        )
+        return True
+    except Exception as cleanup_err:
+        print(f"⚠️ Could not clear google_refresh_token after invalid_grant: {cleanup_err}")
+        return False
 
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'encryption_key.key')
 
@@ -87,7 +121,7 @@ def get_drive_service(user):
             token_uri="https://oauth2.googleapis.com/token",
             client_id=client_id,
             client_secret=client_secret,
-            scopes=SCOPES
+            scopes=GOOGLE_SIGNIN_OAUTH_SCOPES
         )
 
         # Refresh the access token
@@ -97,6 +131,10 @@ def get_drive_service(user):
         service = build('drive', 'v3', credentials=creds)
         return service
 
+    except RefreshError as e:
+        _clear_google_refresh_token_if_invalid_grant(user, e)
+        print(f"❌ Failed to build Drive service: {e}")
+        return None
     except Exception as e:
         print(f"❌ Failed to build Drive service: {e}")
         return None
@@ -295,8 +333,11 @@ def get_gmail_service(user, scopes=None):
         # print(f"⚠️ User {user.email} has no refresh token.")
         return None
 
+    # Refresh token was issued with GOOGLE_SIGNIN_OAUTH_SCOPES; scope list must match at refresh.
     if scopes is None:
-        scopes = GMAIL_READONLY_SCOPES
+        oauth_scopes = GOOGLE_SIGNIN_OAUTH_SCOPES
+    else:
+        oauth_scopes = scopes
 
     try:
         client_id = _get_google_client_id()
@@ -311,13 +352,17 @@ def get_gmail_service(user, scopes=None):
             token_uri="https://oauth2.googleapis.com/token",
             client_id=client_id,
             client_secret=client_secret,
-            scopes=scopes
+            scopes=oauth_scopes
         )
 
         creds.refresh(Request())
         service = build('gmail', 'v1', credentials=creds)
         return service
 
+    except RefreshError as e:
+        _clear_google_refresh_token_if_invalid_grant(user, e)
+        print(f"❌ Failed to build Gmail service: {e}")
+        return None
     except Exception as e:
         print(f"❌ Failed to build Gmail service: {e}")
         return None

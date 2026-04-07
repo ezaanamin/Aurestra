@@ -21,8 +21,7 @@ from drive_utils import (
     get_gmail_service,
     create_message,
     send_gmail_message,
-    SCOPES as DRIVE_SCOPES,
-    GMAIL_READONLY_SCOPES,
+    GOOGLE_SIGNIN_OAUTH_SCOPES,
 )
 from fcm_utils import send_push_to_all
 from sqlalchemy import func, desc, extract, case
@@ -204,6 +203,9 @@ def send_otp_email(to_email, otp_code):
         
         # Create Message (Sender 'me' uses the authenticated user's email)
         message = create_message("me", to_email, "Your Aurestra Verification Code", text_content, html_content)
+        
+        
+        
         
         result = send_gmail_message(service, "me", message)
         
@@ -453,7 +455,7 @@ def google_login():
                 
                 flow = Flow.from_client_config(
                     client_config,
-                    scopes=DRIVE_SCOPES + GMAIL_READONLY_SCOPES,
+                    scopes=GOOGLE_SIGNIN_OAUTH_SCOPES,
                     redirect_uri=''
                 )
                 
@@ -464,7 +466,13 @@ def google_login():
                     user.google_refresh_token = credentials.refresh_token
                     db.session.commit()
                     print(f"✅ [AUTH] Saved Refresh Token for {email}")
-                
+                else:
+                    print(
+                        f"⚠️ [AUTH] Auth code exchanged but Google returned no new refresh_token for {email}. "
+                        "Sign out in the app and sign in again. If this repeats, check Cloud Console → OAuth consent: "
+                        "Testing mode revokes refresh tokens after ~7 days unless the app is in Production or the user is a test user."
+                    )
+
             except Exception as e:
                 print(f"❌ [AUTH] Failed to exchange auth code: {str(e)}")
                 # Should we fail the login? Maybe not, but Drive backup won't work.

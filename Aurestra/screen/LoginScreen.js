@@ -123,6 +123,13 @@ const LoginScreen = ({ navigation }) => {
 
   const handleGoogleLogin = async () => {
     try {
+      // Clear cached Google session so sign-in returns a new serverAuthCode. Without this, Google may omit a new
+      // refresh token and the backend keeps an expired one (same token is used for Gmail OTP + Drive).
+      try {
+        await GoogleSignin.signOut();
+      } catch (_) {
+        /* ignore */
+      }
       await GoogleSignin.hasPlayServices();
       const userInfo = await GoogleSignin.signIn();
       console.log('Google User Info:', userInfo);
