@@ -177,7 +177,8 @@ const ProfileScreen = ({ navigation }) => {
   const handleLogout = async () => {
     try {
       await dispatch(logoutUser()).unwrap();
-      // App.js useEffect will automatically redirect to Login
+      // Explicitly redirect to Login to fix the logout bug
+      navigation.replace('Login');
     } catch (e) {
       console.error('Logout failed:', e);
     }

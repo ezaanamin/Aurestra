@@ -30,6 +30,8 @@ axios.interceptors.request.use(
   }
 );
 
+import { reset } from '../../navigation/RootNavigation';
+
 // Response Interceptor: Handle 401 errors (invalid/expired token)
 axios.interceptors.response.use(
   (response) => response,
@@ -47,14 +49,13 @@ axios.interceptors.response.use(
       // Clear all auth data
       await AsyncStorage.removeItem('userToken');
       await AsyncStorage.removeItem('userData');
+      await AsyncStorage.removeItem('userDecryptionKey');
 
       // Show user-friendly message
       ToastAndroid.show('⚠️ Session expired. Please login again.', ToastAndroid.LONG);
 
-      // Force navigation to login screen
-      // reset('Login'); // Loop fix
-
-      // App.js will automatically redirect to login when token is null
+      // Force navigation to login screen to prevent dashboard loop
+      try { reset('Login'); } catch(e) {}
     }
     return Promise.reject(error);
   }
