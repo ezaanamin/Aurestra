@@ -186,6 +186,20 @@ export const loginWithGoogle = createAsyncThunk(
       const url = `${API_BASE_URL}/api/auth/verify`;
       const response = await axios.post(url, { email, idToken });
       if (response.data.token) {
+        // Clear stale local key if user changed or if backend has no key configured
+        const storedUserData = await AsyncStorage.getItem('userData');
+        if (storedUserData) {
+          try {
+            const parsed = JSON.parse(storedUserData);
+            if (parsed.email !== email) {
+              await AsyncStorage.removeItem('userDecryptionKey');
+            }
+          } catch (e) {}
+        }
+        if (!response.data.user?.has_decryption_key) {
+          await AsyncStorage.removeItem('userDecryptionKey');
+        }
+
         await AsyncStorage.setItem('userToken', response.data.token);
         dispatch(fetchUserAccounts());
         dispatch(fetchLatestTransactions(4));
@@ -223,6 +237,21 @@ export const loginWithEmail = createAsyncThunk(
     try {
       const response = await axios.post(`${API_BASE_URL}/api/auth/login`, credentials);
       if (response.data.token) {
+        // Clear stale local key if user changed or if backend has no key configured
+        const email = credentials.email?.trim().lower();
+        const storedUserData = await AsyncStorage.getItem('userData');
+        if (storedUserData) {
+          try {
+            const parsed = JSON.parse(storedUserData);
+            if (parsed.email !== email) {
+              await AsyncStorage.removeItem('userDecryptionKey');
+            }
+          } catch (e) {}
+        }
+        if (!response.data.user?.has_decryption_key) {
+          await AsyncStorage.removeItem('userDecryptionKey');
+        }
+
         await AsyncStorage.setItem('userToken', response.data.token);
         dispatch(fetchUserAccounts());
         dispatch(fetchLatestTransactions(4));
@@ -244,6 +273,7 @@ export const logoutUser = createAsyncThunk(
   async (_, { dispatch }) => {
     await AsyncStorage.removeItem('userToken');
     await AsyncStorage.removeItem('userData');
+    await AsyncStorage.removeItem('userDecryptionKey');
     dispatch(logout()); // clear state
     return true;
   }
