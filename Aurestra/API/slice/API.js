@@ -194,7 +194,7 @@ export const loginWithGoogle = createAsyncThunk(
   'api/loginWithGoogle',
   async ({ email, idToken }, { rejectWithValue, dispatch }) => {
     try {
-      const url = `${API_BASE_URL}/api/auth/verify`;
+      const url = `${API_BASE_URL}/api/google/login`;
       const response = await axios.post(url, { email, idToken });
       if (response.data.token) {
         // Clear stale local key if user changed or if backend has no key configured
@@ -249,7 +249,7 @@ export const loginWithEmail = createAsyncThunk(
       const response = await axios.post(`${API_BASE_URL}/api/auth/login`, credentials);
       if (response.data.token) {
         // Clear stale local key if user changed or if backend has no key configured
-        const email = credentials.email?.trim().lower();
+        const email = credentials.email?.trim().toLowerCase();
         const storedUserData = await AsyncStorage.getItem('userData');
         if (storedUserData) {
           try {

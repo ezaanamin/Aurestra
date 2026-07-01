@@ -19,23 +19,35 @@ import CustomAlert from '../components/CustomAlert';
 import AuthInput from '../components/AuthInput';
 import LinearGradient from 'react-native-linear-gradient';
 import axios from 'axios';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { API_BASE_URL } from '../API_URL';
 import { fetchUserProfile } from '../API/slice/API';
 
-const schema = z.object({
-  decryptionKey: z.string().min(8, "Key must be at least 8 characters long.")
-    .regex(/[A-Z]/, "Must contain at least one uppercase letter.")
-    .regex(/[0-9]/, "Must contain at least one number.")
-    .regex(/[^A-Za-z0-9]/, "Must contain at least one special character."),
-  confirmKey: z.string()
+// ── Schema for first-time SETUP (new key + confirm) ──────────────────────────
+const setupSchema = z.object({
+  decryptionKey: z.string().min(8, 'Key must be at least 8 characters long.')
+    .regex(/[A-Z]/, 'Must contain at least one uppercase letter.')
+    .regex(/[0-9]/, 'Must contain at least one number.')
+    .regex(/[^A-Za-z0-9]/, 'Must contain at least one special character.'),
+  confirmKey: z.string(),
 }).refine((data) => data.decryptionKey === data.confirmKey, {
-  message: "Keys do not match.",
-  path: ["confirmKey"],
+  message: 'Keys do not match.',
+  path: ['confirmKey'],
+});
+
+// ── Schema for UNLOCK (existing key, no confirm needed) ──────────────────────
+const unlockSchema = z.object({
+  decryptionKey: z.string().min(1, 'Please enter your decryption key.'),
+  confirmKey: z.string().optional(),
 });
 
 const SetupDecryptionKeyScreen = ({ navigation }) => {
   const dispatch = useDispatch();
+  const user = useSelector((state) => state.API?.user);
+
+  // If the backend already has a key hash registered, we are in UNLOCK mode
+  const isUnlockMode = !!user?.has_decryption_key;
+
   const [alertConfig, setAlertConfig] = useState({
     visible: false,
     type: 'error',
@@ -43,39 +55,69 @@ const SetupDecryptionKeyScreen = ({ navigation }) => {
     message: '',
   });
 
-  const { control, handleSubmit, formState: { errors } } = useForm({
-    resolver: zodResolver(schema),
+  const { control, handleSubmit, formState: { errors }, reset } = useForm({
+    resolver: zodResolver(isUnlockMode ? unlockSchema : setupSchema),
     defaultValues: { decryptionKey: '', confirmKey: '' },
   });
 
   const showAlert = (type, title, message) => setAlertConfig({ visible: true, type, title, message });
   const hideAlert = () => setAlertConfig(prev => ({ ...prev, visible: false }));
 
-  const handleSetupKey = async (data) => {
+  const handleSubmitKey = async (data) => {
     try {
-      // 1. Save locally
-      await AsyncStorage.setItem('userDecryptionKey', data.decryptionKey);
-      
-      // 2. Save to backend database
       const token = await AsyncStorage.getItem('userToken');
-      if (token) {
+      if (!token) {
+        showAlert('error', 'Session Expired', 'Your session has expired. Please log in again.');
+        navigation.replace('Login');
+        return;
+      }
+
+      if (isUnlockMode) {
+        // ── UNLOCK: Verify key against the backend hash ─────────────────────
+        // POST to /api/profile sends the key; backend verifies hash match.
+        // If it doesn't match, backend returns 400 "Incorrect decryption key."
         await axios.post(
           `${API_BASE_URL}/api/profile`,
           { decryption_key: data.decryptionKey },
           { headers: { Authorization: `Bearer ${token}` } }
         );
-        // Refresh profile state in Redux
+
+        // Key verified — save locally and continue
+        await AsyncStorage.setItem('userDecryptionKey', data.decryptionKey);
         await dispatch(fetchUserProfile());
+
+        showAlert('success', 'Vault Unlocked', 'Your vault has been successfully unlocked.');
+        setTimeout(() => navigation.replace('MainTabs'), 2000);
+      } else {
+        // ── SETUP: First-time key creation ─────────────────────────────────
+        // Save locally first so the request interceptor can attach it
+        await AsyncStorage.setItem('userDecryptionKey', data.decryptionKey);
+
+        await axios.post(
+          `${API_BASE_URL}/api/profile`,
+          { decryption_key: data.decryptionKey },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        await dispatch(fetchUserProfile());
+
+        showAlert('success', 'Key Setup Successful', 'Your decryption key has been securely saved.');
+        setTimeout(() => navigation.replace('MainTabs'), 2500);
       }
-      
-      showAlert('success', 'Key Setup Successful', 'Your decryption key has been securely saved.');
-      setTimeout(() => {
-        navigation.replace('MainTabs');
-      }, 2500);
     } catch (error) {
-      console.error('Setup Key Error:', error);
-      const serverMessage = error.response?.data?.error || error.response?.data?.message || 'Failed to save the decryption key securely to the server.';
-      showAlert('error', 'Setup Failed', serverMessage);
+      console.error('[SetupDecryptionKeyScreen] Error:', error?.response?.data || error?.message);
+      const serverMessage =
+        error.response?.data?.error ||
+        error.response?.data?.message ||
+        (isUnlockMode
+          ? 'Incorrect decryption key. Please try again.'
+          : 'Failed to save the decryption key securely.');
+
+      // Clear the stale local key on unlock failure so it doesn't poison requests
+      if (isUnlockMode) {
+        await AsyncStorage.removeItem('userDecryptionKey');
+      }
+
+      showAlert('error', isUnlockMode ? 'Unlock Failed' : 'Setup Failed', serverMessage);
     }
   };
 
@@ -84,48 +126,104 @@ const SetupDecryptionKeyScreen = ({ navigation }) => {
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          
+
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
             <View style={styles.glowTopLeft} />
           </View>
 
           <View style={styles.brandSection}>
             <View style={styles.iconRing}>
-              <Icon name="shield-key-outline" size={40} color="#22E6A8" />
+              <Icon
+                name={isUnlockMode ? 'lock-open-variant-outline' : 'shield-key-outline'}
+                size={40}
+                color="#22E6A8"
+              />
             </View>
-            <Text style={styles.brandName}>Secure Vault</Text>
-            <Text style={styles.brandHint}>SETUP DECRYPTION KEY</Text>
+            <Text style={styles.brandName}>
+              {isUnlockMode ? 'Unlock Vault' : 'Secure Vault'}
+            </Text>
+            <Text style={styles.brandHint}>
+              {isUnlockMode ? 'ENTER YOUR DECRYPTION KEY' : 'SETUP DECRYPTION KEY'}
+            </Text>
             <Text style={styles.description}>
-              Aurestra uses end-to-end encryption. Your data is encrypted on your device and cannot be read by anyone else, including us. Please set a strong decryption key to secure your vault.
+              {isUnlockMode
+                ? 'Enter your vault decryption key to access your encrypted financial data on this device.'
+                : 'Aurestra uses end-to-end encryption. Set a strong decryption key to secure your vault. Do not lose it — we cannot recover it for you.'}
             </Text>
           </View>
 
           <View style={styles.formCard}>
-            <Controller control={control} name="decryptionKey" render={({ field: { onChange, value } }) => (
-              <View>
-                <AuthInput icon="key-variant" placeholder="Decryption Key" value={value} onChangeText={onChange} isPassword secureTextEntry />
-                {errors.decryptionKey && <Text style={styles.errorText}>{errors.decryptionKey.message}</Text>}
-              </View>
-            )} />
+            <Controller
+              control={control}
+              name="decryptionKey"
+              render={({ field: { onChange, value } }) => (
+                <View>
+                  <AuthInput
+                    icon="key-variant"
+                    placeholder={isUnlockMode ? 'Enter Decryption Key' : 'Decryption Key'}
+                    value={value}
+                    onChangeText={onChange}
+                    isPassword
+                    secureTextEntry
+                  />
+                  {errors.decryptionKey && (
+                    <Text style={styles.errorText}>{errors.decryptionKey.message}</Text>
+                  )}
+                </View>
+              )}
+            />
 
-            <Controller control={control} name="confirmKey" render={({ field: { onChange, value } }) => (
-              <View>
-                <AuthInput icon="key-check" placeholder="Confirm Decryption Key" value={value} onChangeText={onChange} isPassword secureTextEntry />
-                {errors.confirmKey && <Text style={styles.errorText}>{errors.confirmKey.message}</Text>}
-              </View>
-            )} />
+            {!isUnlockMode && (
+              <Controller
+                control={control}
+                name="confirmKey"
+                render={({ field: { onChange, value } }) => (
+                  <View>
+                    <AuthInput
+                      icon="key-check"
+                      placeholder="Confirm Decryption Key"
+                      value={value}
+                      onChangeText={onChange}
+                      isPassword
+                      secureTextEntry
+                    />
+                    {errors.confirmKey && (
+                      <Text style={styles.errorText}>{errors.confirmKey.message}</Text>
+                    )}
+                  </View>
+                )}
+              />
+            )}
 
             <View style={styles.warningBox}>
-              <Icon name="alert-circle-outline" size={20} color="#F59E0B" />
-              <Text style={styles.warningText}>
-                Do not lose this key! If you lose it, your data cannot be recovered. We do not store a copy of your key.
+              <Icon
+                name={isUnlockMode ? 'information-outline' : 'alert-circle-outline'}
+                size={20}
+                color={isUnlockMode ? '#22E6A8' : '#F59E0B'}
+              />
+              <Text style={[styles.warningText, isUnlockMode && styles.infoText]}>
+                {isUnlockMode
+                  ? 'This is the key you set up when you first created your account. It never leaves your device.'
+                  : 'Do not lose this key! If you lose it, your data cannot be recovered. We do not store a copy of your key.'}
               </Text>
             </View>
 
-            <TouchableOpacity onPress={handleSubmit(handleSetupKey)} style={styles.submitBtn}>
-              <LinearGradient colors={['#22E6A8', '#10B981']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.submitBtnGradient}>
-                <Text style={styles.submitBtnText}>Save Securely & Continue</Text>
-                <Icon name="shield-check" size={20} color="#064E3B" style={{ marginLeft: 8 }} />
+            <TouchableOpacity onPress={handleSubmit(handleSubmitKey)} style={styles.submitBtn}>
+              <LinearGradient
+                colors={['#22E6A8', '#10B981']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.submitBtnGradient}
+              >
+                <Text style={styles.submitBtnText}>
+                  {isUnlockMode ? 'Unlock Vault' : 'Save Securely & Continue'}
+                </Text>
+                <Icon
+                  name={isUnlockMode ? 'lock-open-variant' : 'shield-check'}
+                  size={20}
+                  color="#064E3B"
+                  style={{ marginLeft: 8 }}
+                />
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -151,6 +249,7 @@ const styles = StyleSheet.create({
   errorText: { color: '#EF4444', fontSize: 12, marginTop: -12, marginBottom: 12, marginLeft: 8 },
   warningBox: { flexDirection: 'row', backgroundColor: 'rgba(245,158,11,0.1)', padding: 12, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)' },
   warningText: { color: '#FCD34D', fontSize: 13, marginLeft: 10, flex: 1, lineHeight: 18 },
+  infoText: { color: '#22E6A8' },
   submitBtn: { width: '100%', borderRadius: 16, overflow: 'hidden' },
   submitBtnGradient: { paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   submitBtnText: { color: '#064E3B', fontSize: 16, fontWeight: '700' },
