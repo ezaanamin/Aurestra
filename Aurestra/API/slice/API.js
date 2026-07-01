@@ -35,7 +35,14 @@ axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-
+      
+      const msg = error.response.data?.message || '';
+      const code = error.response.data?.code || '';
+      
+      // Do not log the user out if the error is just a decryption key mismatch or missing key
+      if (msg.toLowerCase().includes('decryption key') || code === 'KEY_NOT_CONFIGURED') {
+        return Promise.reject(error);
+      }
 
       // Clear all auth data
       await AsyncStorage.removeItem('userToken');
