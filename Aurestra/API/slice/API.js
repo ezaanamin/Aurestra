@@ -30,8 +30,6 @@ axios.interceptors.request.use(
   }
 );
 
-import { reset } from '../../navigation/RootNavigation';
-
 // Response Interceptor: Handle 401 errors (invalid/expired token)
 axios.interceptors.response.use(
   (response) => response,
@@ -54,8 +52,13 @@ axios.interceptors.response.use(
       // Show user-friendly message
       ToastAndroid.show('⚠️ Session expired. Please login again.', ToastAndroid.LONG);
 
-      // Force navigation to login screen to prevent dashboard loop
-      try { reset('Login'); } catch(e) {}
+      // Force navigation to login screen to prevent dashboard loop (dynamic require to avoid circular dependencies)
+      try { 
+        const RootNavigation = require('../../navigation/RootNavigation');
+        RootNavigation.reset('Login'); 
+      } catch(e) {
+        console.error('Failed to redirect to login:', e);
+      }
     }
     return Promise.reject(error);
   }
