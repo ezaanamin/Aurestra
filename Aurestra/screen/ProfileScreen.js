@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   ScrollView,
   TouchableOpacity,
@@ -13,7 +12,6 @@ import {
   Modal,
   FlatList,
   Animated,
-  Alert,
   ToastAndroid,
   ActivityIndicator,
   TextInput,
@@ -21,15 +19,22 @@ import {
   Linking,
   Platform
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSettings } from '../context/SettingsContext';
 
-import { fetchUserProfile, registerDeviceToken, logout, triggerManualBackup } from '../API/slice/API';
+import { fetchUserProfile, registerDeviceToken, logoutUser, triggerManualBackup, getLatestBackup } from '../API/slice/API';
 import { API_BASE_URL, setApiUrl } from '../API_URL';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  isNotificationAccessGranted,
+  promptBankNotificationAccessSetup,
+} from '../utils/bankNotificationBridge';
 
+const APP_VERSION = require('../package.json').version;
 const { width } = Dimensions.get('window');
 
 const LANGUAGES = ['English', 'Urdu', 'Arabic', 'French', 'Spanish'];
@@ -103,7 +108,8 @@ const ProfileScreen = ({ navigation }) => {
     currency,
     updateCurrency,
     t,
-    colors
+    colors,
+    globalStyles,
   } = useSettings();
 
   const [animatedValue] = useState(new Animated.Value(0));
@@ -116,6 +122,25 @@ const ProfileScreen = ({ navigation }) => {
 
   const [apiModalVisible, setApiModalVisible] = useState(false);
   const [apiUrlInput, setApiUrlInput] = useState(API_BASE_URL);
+
+  const [bankNotifAccess, setBankNotifAccess] = useState(false);
+
+  const refreshBankNotifAccess = React.useCallback(() => {
+    if (Platform.OS !== 'android') {
+      setBankNotifAccess(false);
+      return;
+    }
+    isNotificationAccessGranted()
+      .then(setBankNotifAccess)
+      .catch(() => setBankNotifAccess(false));
+  }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      refreshBankNotifAccess();
+      registerTokenIfAvailable();
+    }, [refreshBankNotifAccess]),
+  );
 
   const lastCheck = useSelector(state => state.API.lastSmsCheck);
 
@@ -150,12 +175,12 @@ const ProfileScreen = ({ navigation }) => {
   }, [lastCheck]);
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem('userToken');
-    dispatch(logout());
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Login' }],
-    });
+    try {
+      await dispatch(logoutUser()).unwrap();
+      // App.js useEffect will automatically redirect to Login
+    } catch (e) {
+      console.error('Logout failed:', e);
+    }
   };
 
   const registerTokenIfAvailable = async () => {
@@ -179,7 +204,7 @@ const ProfileScreen = ({ navigation }) => {
     { icon: 'plus-circle', label: 'Add Transaction', color: '#8B5CF6', screen: 'Transaction', params: { openAddModal: true } },
     { icon: 'target', label: 'New Goal', color: '#10B981', screen: 'Saving' },
     { icon: 'chart-bar', label: 'Analytics', color: '#3B82F6', screen: 'Transaction' },
-    { icon: 'api', label: 'Agent APIs', color: '#F59E0B', screen: 'FinancialInsights' },
+    { icon: 'brain', label: 'Monthly AI Insights', color: '#F59E0B', screen: 'FinancialInsights' },
   ];
 
   const handleSaveApiUrl = async () => {
@@ -199,9 +224,25 @@ const ProfileScreen = ({ navigation }) => {
     setBackupStatus('loading');
     setBackupMessage('Encrypting & Uploading...');
     try {
-      await dispatch(triggerManualBackup()).unwrap();
-      setBackupStatus('success');
-      setBackupMessage('Backup saved to Google Drive (Aurestra Backups)');
+      const response = await dispatch(triggerManualBackup()).unwrap();
+      const res = response.results;
+      
+      const successCount = (res?.google_drive ? 1 : 0) + (res?.postgresql ? 1 : 0) + (res?.local ? 1 : 0);
+      
+      if (successCount === 3) {
+        setBackupStatus('success');
+        setBackupMessage('Backup fully successful across all 3 destinations!');
+      } else if (successCount > 0) {
+        setBackupStatus('success');
+        let msg = `Partial Backup (${successCount}/3):\n`;
+        msg += `Drive: ${res?.google_drive ? '✅' : '❌'}\n`;
+        msg += `Database: ${res?.postgresql ? '✅' : '❌'}\n`;
+        msg += `Local: ${res?.local ? '✅' : '❌'}`;
+        setBackupMessage(msg);
+      } else {
+        setBackupStatus('error');
+        setBackupMessage('All backup destinations failed. Check server logs.');
+      }
     } catch (e) {
       setBackupStatus('error');
       setBackupMessage(e.message || "Could not complete backup");
@@ -215,55 +256,20 @@ const ProfileScreen = ({ navigation }) => {
     { icon: 'shape', label: 'Categories', screen: 'CategoryManagement', color: '#EC4899' },
     { icon: 'file-document', label: t('transactionHistory'), screen: 'FullHistory', color: '#F59E0B' },
     {
-      icon: 'cloud-upload',
-      label: 'Backup Data',
-      color: '#10B981',
-      action: handleBackup
+      icon: 'database-export',
+      label: 'Backup & Recovery',
+      screen: 'BackupManagement',
+      color: '#22E6A8',
+    },
+    {
+      icon: 'api',
+      label: 'Live State APIs',
+      screen: 'LiveApis',
+      color: '#6366F1',
     },
   ];
 
   const preferencesMenuItems = [
-    {
-      icon: 'bell',
-      label: t('notifications'),
-      toggle: true,
-      value: notificationsEnabled,
-      setter: async (val) => {
-        toggleNotifications(val);
-        if (val) {
-          if (Platform.OS === 'android' && Platform.Version >= 33) {
-            try {
-              const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-              if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-                ToastAndroid.show('Permission required', ToastAndroid.SHORT);
-              }
-            } catch (e) { }
-          }
-          registerTokenIfAvailable();
-        }
-      },
-      color: '#EF4444',
-    },
-    {
-      icon: 'bell-alert',
-      label: 'Fix Notifications',
-      subtitle: 'Grant permissions / Open Settings',
-      action: async () => {
-        if (Platform.OS === 'android') {
-          if (Platform.Version >= 33) {
-            const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-            if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-              ToastAndroid.show('Notifications Enabled', ToastAndroid.SHORT);
-              return;
-            }
-          }
-          // If we are here, either < 33 or denied. Open settings.
-          ToastAndroid.show('Opening Settings...', ToastAndroid.SHORT);
-          Linking.openSettings();
-        }
-      },
-      color: '#F59E0B',
-    },
     {
       icon: 'theme-light-dark',
       label: t('darkMode'),
@@ -304,10 +310,6 @@ const ProfileScreen = ({ navigation }) => {
     { icon: 'shield-check', label: t('privacyPolicy'), color: '#10B981' },
     { icon: 'file-document-outline', label: t('termsOfService'), color: '#F59E0B' },
   ];
-
-  const isScreenActive = (screenName) => {
-    return screenName === 'Profile';
-  };
 
   const renderMenuItem = (item, index, isLastItem) => {
     if (item.toggle) {
@@ -371,7 +373,10 @@ const ProfileScreen = ({ navigation }) => {
 
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#0A0A0B' : '#F8F9FE' }]}>
+    <SafeAreaView
+      style={[styles.container, globalStyles.screen, { backgroundColor: colors.background }]}
+      edges={['top']}
+    >
       <StatusBar
         barStyle={isDarkMode ? "light-content" : "dark-content"}
         backgroundColor="transparent"
@@ -385,11 +390,15 @@ const ProfileScreen = ({ navigation }) => {
         {/* Hero Header */}
         <View style={styles.heroSection}>
           <View style={styles.heroTop}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backButton, {
-              backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'
-            }]}>
-              <Icon name="arrow-left" size={22} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
-            </TouchableOpacity>
+            {navigation.canGoBack() ? (
+              <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backButton, {
+                backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'
+              }]}>
+                <Icon name="arrow-left" size={22} color={isDarkMode ? '#FFFFFF' : '#1A1A1D'} />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.backButton} />
+            )}
 
             <TouchableOpacity style={[styles.settingsButton, {
               backgroundColor: isDarkMode ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.1)'
@@ -593,7 +602,7 @@ const ProfileScreen = ({ navigation }) => {
             }]}>
               <Icon name="information-outline" size={14} color={isDarkMode ? '#A1A1AA' : '#71717A'} />
               <Text style={[styles.versionText, { color: isDarkMode ? '#A1A1AA' : '#71717A' }]}>
-                Version 1.1.0
+                Version {APP_VERSION}
               </Text>
             </View>
 
@@ -644,8 +653,8 @@ const ProfileScreen = ({ navigation }) => {
           if (backupStatus !== 'loading') setBackupModalVisible(false);
         }}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF' }]}>
+        <View style={styles.centeredModalOverlay}>
+          <View style={[styles.centeredModalContent, { backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF' }]}>
             <View style={{ alignItems: 'center', paddingVertical: 20 }}>
               {backupStatus === 'loading' ? (
                 <View style={{ marginBottom: 20, alignItems: 'center' }}>
@@ -656,9 +665,14 @@ const ProfileScreen = ({ navigation }) => {
                 </View>
               ) : backupStatus === 'success' ? (
                 <View style={{ marginBottom: 20, alignItems: 'center' }}>
-                  <Icon name="cloud-check" size={56} color="#10B981" />
+                  {/* Show warning icon for partial backup, full success for all 3 */}
+                  <Icon
+                    name={backupMessage.startsWith('Partial') ? 'alert-circle-outline' : 'cloud-check'}
+                    size={56}
+                    color={backupMessage.startsWith('Partial') ? '#F59E0B' : '#10B981'}
+                  />
                   <Text style={[styles.modalTitle, { marginVertical: 16, color: isDarkMode ? '#FFFFFF' : '#1A1A1D' }]}>
-                    Backup Complete
+                    {backupMessage.startsWith('Partial') ? 'Partial Backup' : 'Backup Complete'}
                   </Text>
                 </View>
               ) : (
@@ -770,134 +784,12 @@ const ProfileScreen = ({ navigation }) => {
                 }}
                 onPress={handleSaveApiUrl}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: 'Bold' }}>Save</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>Save</Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
-
-      {/* Bottom Navigation */}
-      <View style={[styles.bottomNav, {
-        backgroundColor: isDarkMode ? '#1A1A1D' : '#FFFFFF',
-        borderTopColor: isDarkMode ? '#27272A' : '#E4E4E7'
-      }]}>
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Home')}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.navIconWrapper,
-            isScreenActive('Home') && styles.navIconActive
-          ]}>
-            <Icon
-              name="home"
-              size={24}
-              color={isScreenActive('Home') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
-            />
-          </View>
-          <Text style={[
-            styles.navLabel,
-            { color: isScreenActive('Home') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
-          ]}>
-            Home
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Budget')}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.navIconWrapper,
-            isScreenActive('Budget') && styles.navIconActive
-          ]}>
-            <Icon
-              name="chart-bar"
-              size={24}
-              color={isScreenActive('Budget') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
-            />
-          </View>
-          <Text style={[
-            styles.navLabel,
-            { color: isScreenActive('Budget') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
-          ]}>
-            Budget
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Transaction')}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.navIconWrapper,
-            isScreenActive('Transaction') && styles.navIconActive
-          ]}>
-            <Icon
-              name="swap-horizontal"
-              size={24}
-              color={isScreenActive('Transaction') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
-            />
-          </View>
-          <Text style={[
-            styles.navLabel,
-            { color: isScreenActive('Transaction') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
-          ]}>
-            Activity
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Saving')}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.navIconWrapper,
-            isScreenActive('Saving') && styles.navIconActive
-          ]}>
-            <Icon
-              name="piggy-bank"
-              size={24}
-              color={isScreenActive('Saving') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
-            />
-          </View>
-          <Text style={[
-            styles.navLabel,
-            { color: isScreenActive('Saving') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
-          ]}>
-            Goals
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Profile')}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.navIconWrapper,
-            isScreenActive('Profile') && styles.navIconActive,
-            isScreenActive('Profile') && { backgroundColor: '#8B5CF615' }
-          ]}>
-            <Icon
-              name="account-circle"
-              size={24}
-              color={isScreenActive('Profile') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA')}
-            />
-          </View>
-          <Text style={[
-            styles.navLabel,
-            { color: isScreenActive('Profile') ? '#8B5CF6' : (isDarkMode ? '#71717A' : '#A1A1AA') }
-          ]}>
-            Profile
-          </Text>
-        </TouchableOpacity>
-      </View>
     </SafeAreaView>
   );
 };
@@ -907,7 +799,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 100,
+    paddingBottom: 28,
   },
   heroSection: {
     paddingHorizontal: 20,
@@ -1018,7 +910,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '800',
     letterSpacing: -0.5,
-    Bottom: 4,
+    marginBottom: 4,
   },
   statLabel: {
     fontSize: 12,
@@ -1188,6 +1080,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#8B5CF6',
   },
+  centeredModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  centeredModalContent: {
+    width: '100%',
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1250,38 +1155,6 @@ const styles = StyleSheet.create({
   },
   selectedBadge: {
     marginLeft: 'auto',
-  },
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 12,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
-    borderTopWidth: 1,
-  },
-  navItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-  },
-  navIconWrapper: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  navIconActive: {
-    backgroundColor: 'rgba(139,92,246,0.1)',
-  },
-  navLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.2,
   },
 });
 

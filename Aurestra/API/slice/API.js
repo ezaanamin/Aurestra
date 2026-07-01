@@ -12,13 +12,16 @@ import { ToastAndroid } from 'react-native';
 // Set default base URL
 axios.defaults.baseURL = API_BASE_URL;
 
-// Request Interceptor: Attach token to all requests
+// Request Interceptor: Attach token and decryption key to all requests
 axios.interceptors.request.use(
   async (config) => {
     const token = await AsyncStorage.getItem('userToken');
-    // silent: no debug logging
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    const decryptionKey = await AsyncStorage.getItem('userDecryptionKey');
+    if (decryptionKey) {
+      config.headers['X-Decryption-Key'] = decryptionKey;
     }
     return config;
   },
@@ -49,6 +52,29 @@ axios.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/** Metro console (__DEV__): wallet slug the backend stored on each transaction row. */
+function logWalletAttributionBatch(context, rows) {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+  if (!Array.isArray(rows) || rows.length === 0) return;
+  for (const t of rows) {
+    if (!t || typeof t !== 'object') continue;
+    console.log(
+      '[WALLET_ATTRIBUTION]',
+      context,
+      `id=${t.id}`,
+      `type=${t.type || '?'}`,
+      `amount=${t.amount != null ? t.amount : '?'}`,
+      `wallet_slug=${t.account_balance_source != null && t.account_balance_source !== '' ? t.account_balance_source : '(none)'}`,
+      `balance_applied=${String(t.balance_applied)}`,
+      `sender=${String(t.sender || '').slice(0, 48)}`,
+      `receiver=${String(t.receiver || '').slice(0, 48)}`,
+      `txn_source=${t.source || '?'}`,
+      `purpose=${String(t.purpose || '').slice(0, 40)}`,
+    );
+  }
+}
+
 export const registerDeviceToken = createAsyncThunk(
   'api/registerDeviceToken',
   async (token, { rejectWithValue }) => {
@@ -76,38 +102,102 @@ export const checkBackendHealth = createAsyncThunk(
 );
 
 // =======================================================
-// AUTH THUNKS
+// BACKUP THUNKS
 // =======================================================
-export const loginUser = createAsyncThunk(
-  'api/loginUser',
-  async ({ email, password }, { rejectWithValue }) => {
+
+export const createBackup = createAsyncThunk(
+  'api/createBackup',
+  async (_, { rejectWithValue }) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/login`, { email, password });
+      const response = await axios.post(`${API_BASE_URL}/api/backup/create`);
       return response.data;
     } catch (error) {
-      return rejectWithValue(error.response?.data?.message || 'Login failed');
+      return rejectWithValue(error.response?.data?.error || 'Backup creation failed');
     }
   }
 );
 
+export const listBackups = createAsyncThunk(
+  'api/listBackups',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/backup/list`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to fetch backups');
+    }
+  }
+);
+
+export const getLatestBackup = createAsyncThunk(
+  'api/getLatestBackup',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/backup/latest`);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Failed to fetch latest backup');
+    }
+  }
+);
+
+export const restoreBackup = createAsyncThunk(
+  'api/restoreBackup',
+  async ({ backupId, decryptionKey }, { rejectWithValue }) => {
+    try {
+      const headers = {};
+      if (decryptionKey) {
+        headers['X-Decryption-Key'] = decryptionKey;
+      }
+      const response = await axios.post(`${API_BASE_URL}/api/backup/restore/${backupId}`, {
+        confirmed: true,
+      }, { headers });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(
+        error.response?.data?.error || error.response?.data?.message || 'Restore failed'
+      );
+    }
+  }
+);
+
+
+export const deleteBackup = createAsyncThunk(
+  'api/deleteBackup',
+  async ({ backupId }, { rejectWithValue }) => {
+    try {
+      await axios.delete(`${API_BASE_URL}/api/backup/${backupId}`);
+      return { backupId };
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || 'Delete failed');
+    }
+  }
+);
+
+// =======================================================
+// AUTH THUNKS
+// =======================================================
+
+
 export const loginWithGoogle = createAsyncThunk(
   'api/loginWithGoogle',
-  async ({ idToken, serverAuthCode }, { rejectWithValue }) => {
+  async ({ email, idToken }, { rejectWithValue, dispatch }) => {
     try {
-      const url = `${API_BASE_URL}/api/google/login`;
-
-
-
-      const response = await axios.post(url, { idToken, serverAuthCode });
+      const url = `${API_BASE_URL}/api/auth/verify`;
+      const response = await axios.post(url, { email, idToken });
       if (response.data.token) {
         await AsyncStorage.setItem('userToken', response.data.token);
+        dispatch(fetchUserAccounts());
+        dispatch(fetchLatestTransactions(4));
+        dispatch(fetchBudget());
+        dispatch(fetchCategories());
       }
       return response.data;
     } catch (error) {
-      console.error('❌ [Google Login] Failed Raw Error:', JSON.stringify(error, null, 2));
-      console.error('❌ [Google Login] Error Message:', error.message);
-      console.error('❌ [Google Login] Response Status:', error.response?.status);
-      console.error('❌ [Google Login] Response Data:', error.response?.data);
+      console.error('❌ [Auth Verify] Failed Raw Error:', JSON.stringify(error, null, 2));
+      console.error('❌ [Auth Verify] Error Message:', error.message);
+      console.error('❌ [Auth Verify] Response Status:', error.response?.status);
+      console.error('❌ [Auth Verify] Response Data:', error.response?.data);
 
       const message = error.response?.data?.message || error.message || 'Google Login failed';
       const status = error.response?.status ? ` (Status: ${error.response.status})` : '';
@@ -115,19 +205,94 @@ export const loginWithGoogle = createAsyncThunk(
     }
   }
 );
-
-export const verifyOtp = createAsyncThunk(
-  'api/verifyOtp',
-  async ({ email, otp }, { rejectWithValue }) => {
+export const registerWithEmail = createAsyncThunk(
+  'api/registerWithEmail',
+  async (userData, { rejectWithValue }) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/verify-otp`, { email, otp });
-      // Save token
+      const response = await axios.post(`${API_BASE_URL}/api/auth/register`, userData);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Registration failed');
+    }
+  }
+);
+
+export const loginWithEmail = createAsyncThunk(
+  'api/loginWithEmail',
+  async (credentials, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, credentials);
       if (response.data.token) {
         await AsyncStorage.setItem('userToken', response.data.token);
+        dispatch(fetchUserAccounts());
+        dispatch(fetchLatestTransactions(4));
+        dispatch(fetchBudget());
+        dispatch(fetchCategories());
       }
       return response.data;
     } catch (error) {
+      if (error.response?.data?.requires_verification) {
+        return rejectWithValue(error.response.data);
+      }
+      return rejectWithValue(error.response?.data?.message || 'Login failed');
+    }
+  }
+);
+
+export const logoutUser = createAsyncThunk(
+  'api/logoutUser',
+  async (_, { dispatch }) => {
+    await AsyncStorage.removeItem('userToken');
+    await AsyncStorage.removeItem('userData');
+    dispatch(logout()); // clear state
+    return true;
+  }
+);
+
+export const verifyEmail = createAsyncThunk(
+  'api/verifyEmail',
+  async (token, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/verify-email`, { token });
+      return response.data;
+    } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Verification failed');
+    }
+  }
+);
+
+export const resendVerification = createAsyncThunk(
+  'api/resendVerification',
+  async (email, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/resend-verification`, { email });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Failed to resend verification');
+    }
+  }
+);
+
+export const forgotPassword = createAsyncThunk(
+  'api/forgotPassword',
+  async (email, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/forgot-password`, { email });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Password reset request failed');
+    }
+  }
+);
+
+export const resetPassword = createAsyncThunk(
+  'api/resetPassword',
+  async ({ token, newPassword }, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/reset-password`, { token, new_password: newPassword });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.message || 'Password reset failed');
     }
   }
 );
@@ -345,13 +510,42 @@ export const markStatementRead = createAsyncThunk(
 // TRANSACTIONS ASYNC THUNKS
 // =======================================================
 
+export const uploadReceipt = createAsyncThunk(
+  'api/uploadReceipt',
+  async (imageUri, { rejectWithValue }) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', {
+        uri: imageUri,
+        type: 'image/jpeg',
+        name: 'receipt.jpg',
+      });
+      
+      const response = await axios.post(`${API_BASE_URL}/api/transactions/upload-receipt`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          'Failed to upload receipt'
+      );
+    }
+  }
+);
+
 
 export const fetchLatestTransactions = createAsyncThunk(
   'api/fetchLatestTransactions',
   async (limit = 4, { rejectWithValue }) => {
     try {
       const response = await axios.get(`${API_BASE_URL}/api/latest-transactions?limit=${limit}`);
-      return response.data;
+      const data = response.data;
+      logWalletAttributionBatch('fetchLatestTransactions', Array.isArray(data) ? data : []);
+      return data;
     } catch (error) {
       const message = error?.response?.data?.message || error.message;
       console.error('fetchLatestTransactions error:', message);
@@ -380,6 +574,7 @@ export const updateTransaction = createAsyncThunk(
       const response = await axios.put(`${API_BASE_URL}/api/transactions/${id}`, data);
       dispatch(fetchLatestTransactions(4));
       dispatch(fetchTopSpendingCategories());
+      dispatch(fetchUserAccounts());
       return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to update transaction');
@@ -396,9 +591,14 @@ export const createTransaction = createAsyncThunk(
       dispatch(fetchTopSpendingCategories());
       dispatch(fetchTotalExpenses());
       dispatch(fetchTrendHistory());
+      dispatch(fetchUserAccounts());
       return response.data;
     } catch (error) {
-      return rejectWithValue(error.response?.data?.message || 'Failed to create transaction');
+      return rejectWithValue(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          'Failed to create transaction',
+      );
     }
   }
 );
@@ -544,6 +744,30 @@ export const deleteCategory = createAsyncThunk(
 // =======================================================
 // SMS ASYNC THUNKS (NEW)
 // =======================================================
+
+export const ingestDeviceNotification = createAsyncThunk(
+  'api/ingestDeviceNotification',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/notifications/ingest`, payload);
+      const d = response.data;
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && d) {
+        console.log('[WALLET_ATTRIBUTION]', 'NOTIF_INGEST_RESPONSE', {
+          transaction_id: d.transaction_id,
+          parsed_transaction: d.parsed_transaction,
+          hint: 'Open uncategorized / latest list — each txn logs wallet_slug from API',
+        });
+      }
+      return d;
+    } catch (error) {
+      const errorMessage = error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error.message;
+      console.error('ingestDeviceNotification error:', errorMessage);
+      return rejectWithValue(errorMessage);
+    }
+  }
+);
 
 /**
  * Process a bank SMS and create transaction
@@ -693,10 +917,15 @@ export const processBatchSMS = createAsyncThunk(
 
 export const fetchUserAccounts = createAsyncThunk(
   'api/fetchUserAccounts',
-  async (_, { rejectWithValue }) => {
+  async (arg, { rejectWithValue }) => {
     try {
-      // Assuming endpoint is /api/accounts
-      const response = await axios.get(`${API_BASE_URL}/api/accounts`);
+      const sync =
+        arg === true ||
+        (arg &&
+          typeof arg === 'object' &&
+          (arg.syncStatement === true || arg.sync_bank_email === true));
+      const qs = sync ? '?sync_statement=1' : '';
+      const response = await axios.get(`${API_BASE_URL}/api/accounts${qs}`);
       return response.data;
     } catch (error) {
       console.error('fetchAccounts error:', error.message);
@@ -816,19 +1045,85 @@ export const fetchTotalExpenses = createAsyncThunk(
 
 export const setManualBalance = createAsyncThunk(
   'api/setManualBalance',
-  async ({ amount, source = 'bank' }, { rejectWithValue, dispatch }) => {
+  async ({ amount, source = 'bank', account_id }, { rejectWithValue, dispatch }) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/accounts/set_balance`, {
-        amount,
-        source
-      });
+      const body = { amount };
+      if (account_id != null) body.account_id = account_id;
+      else body.source = source;
+      const response = await axios.post(`${API_BASE_URL}/api/accounts/set_balance`, body);
 
-      // Refresh accounts after setting balance
-      dispatch(fetchUserAccounts());
+      await dispatch(fetchUserAccounts()).unwrap();
 
       return response.data;
     } catch (error) {
-      return rejectWithValue(error.response?.data?.message || 'Failed to set balance');
+      return rejectWithValue(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          'Failed to set balance',
+      );
+    }
+  }
+);
+
+export const createFinancialAccount = createAsyncThunk(
+  'api/createFinancialAccount',
+  async (payload, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/accounts`, payload);
+      await dispatch(fetchUserAccounts()).unwrap();
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || error.message);
+    }
+  }
+);
+
+export const updateFinancialAccount = createAsyncThunk(
+  'api/updateFinancialAccount',
+  async ({ id, ...data }, { rejectWithValue, dispatch }) => {
+    try {
+      const response = await axios.put(`${API_BASE_URL}/api/accounts/${Number(id)}`, data);
+      await dispatch(fetchUserAccounts()).unwrap();
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          'Update failed',
+      );
+    }
+  }
+);
+
+export const deleteFinancialAccount = createAsyncThunk(
+  'api/deleteFinancialAccount',
+  async (id, { rejectWithValue, dispatch }) => {
+    try {
+      await axios.delete(`${API_BASE_URL}/api/accounts/${Number(id)}`);
+      await dispatch(fetchUserAccounts()).unwrap();
+      return id;
+    } catch (error) {
+      return rejectWithValue(
+        error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          'Delete failed',
+      );
+    }
+  }
+);
+
+/** POST { title, text, packageName } → { match: account dict | null } */
+export const matchNotificationToAccount = createAsyncThunk(
+  'api/matchNotificationToAccount',
+  async (payload, { rejectWithValue }) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/accounts/match`, payload);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data?.error || error.message);
     }
   }
 );
@@ -842,7 +1137,12 @@ export const fetchUncategorizedTransactions = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await axios.get(`${API_BASE_URL}/api/transactions/uncategorized`);
-      return response.data;
+      const data = response.data;
+      logWalletAttributionBatch(
+        'fetchUncategorizedTransactions',
+        (data && data.transactions) || [],
+      );
+      return data;
     } catch (error) {
       return rejectWithValue(error.response?.data?.message || 'Failed to fetch uncategorized transactions');
     }
@@ -860,6 +1160,7 @@ export const bulkCategorizeTransactions = createAsyncThunk(
 
       dispatch(fetchUncategorizedTransactions());
       dispatch(fetchLatestTransactions(50));
+      dispatch(fetchUserAccounts());
 
       return response.data;
     } catch (error) {
@@ -1001,11 +1302,7 @@ const initialState = {
 
   // Budget
   budget: null,
-  budgetStatus: 'idle',
-  budgetSaveStatus: 'idle',
-  // Budget
-  budget: null,
-  totalExpenses: 0, // Dedicated state for expense API
+  totalExpenses: 0,
   budgetStatus: 'idle',
   budgetSaveStatus: 'idle',
   budgetError: null,
@@ -1104,9 +1401,19 @@ const APISlice = createSlice({
         state.accountsError = action.payload;
         // Fallback for demo/dev
         state.accounts = [
-          { id: 1, source: 'bank', balance: 0 },
-          { id: 2, source: 'wallet', balance: 0 }
-        ]
+          {
+            id: 1,
+            source: 'bank',
+            display_name: 'Bank Account',
+            holder_name: '',
+            account_kind: 'bank',
+            kind_label: 'BANK ACCOUNT',
+            balance: 0,
+            accent_color: '#A855F7',
+            sort_order: 0,
+            match_keywords: [],
+          },
+        ];
       })
 
       // --- setManualBalance ---
@@ -1359,6 +1666,14 @@ const APISlice = createSlice({
         }
       })
 
+      .addCase(createTransaction.fulfilled, (state, action) => {
+        const list = action.payload?.accounts;
+        if (Array.isArray(list) && list.length) {
+          state.accounts = list;
+          state.accountsStatus = 'succeeded';
+        }
+      })
+
       // --- fetchTopSpendingCategories ---
       .addCase(fetchTopSpendingCategories.pending, (state) => {
         state.topCategoriesStatus = 'loading';
@@ -1395,6 +1710,7 @@ const APISlice = createSlice({
 
         // If transaction was created, add to latestTransactions
         if (action.payload.status === 'success' && action.payload.transaction) {
+          logWalletAttributionBatch('processSMS.fulfilled_new_tx', [action.payload.transaction]);
           // Add new transaction at the beginning
           state.latestTransactions = [
             action.payload.transaction,
@@ -1412,18 +1728,16 @@ const APISlice = createSlice({
         state.smsError = action.payload;
       })
 
-      // --- LOGIN ---
-      .addCase(loginUser.pending, (state) => {
-        state.authStatus = 'loading';
-        state.authError = null;
+      .addCase(ingestDeviceNotification.fulfilled, (state, action) => {
+        const list = action.payload?.accounts;
+        if (Array.isArray(list) && list.length) {
+          state.accounts = list;
+          state.accountsStatus = 'succeeded';
+        }
       })
-      .addCase(loginUser.fulfilled, (state) => {
-        state.authStatus = 'otp_sent';
-      })
-      .addCase(loginUser.rejected, (state, action) => {
-        state.authStatus = 'failed';
-        state.authError = action.payload;
-      })
+
+
+
 
       // --- GOOGLE LOGIN ---
       .addCase(loginWithGoogle.pending, (state) => {
@@ -1431,34 +1745,47 @@ const APISlice = createSlice({
         state.authError = null;
       })
       .addCase(loginWithGoogle.fulfilled, (state, action) => {
-        if (action.payload.otp_required) {
-          state.authStatus = 'otp_sent';
-        } else {
-          state.authStatus = 'authenticated';
-          state.token = action.payload.token;
-          state.user = action.payload.user;
-          state.error = null;
-        }
+        state.authStatus = 'authenticated';
+        state.token = action.payload.token;
+        state.user = action.payload.user;
+        state.error = null;
       })
       .addCase(loginWithGoogle.rejected, (state, action) => {
         state.authStatus = 'failed';
         state.authError = action.payload;
       })
 
-      // --- VERIFY OTP ---
-      .addCase(verifyOtp.pending, (state) => {
+      // --- EMAIL AUTH ---
+      .addCase(loginWithEmail.pending, (state) => {
         state.authStatus = 'loading';
         state.authError = null;
       })
-      .addCase(verifyOtp.fulfilled, (state, action) => {
+      .addCase(loginWithEmail.fulfilled, (state, action) => {
         state.authStatus = 'authenticated';
         state.token = action.payload.token;
         state.user = action.payload.user;
+        state.authError = null;
       })
-      .addCase(verifyOtp.rejected, (state, action) => {
+      .addCase(loginWithEmail.rejected, (state, action) => {
         state.authStatus = 'failed';
         state.authError = action.payload;
       })
+      
+      .addCase(registerWithEmail.pending, (state) => {
+        state.authStatus = 'loading';
+        state.authError = null;
+      })
+      .addCase(registerWithEmail.fulfilled, (state, action) => {
+        state.authStatus = 'registered'; 
+        state.authError = null;
+      })
+      .addCase(registerWithEmail.rejected, (state, action) => {
+        state.authStatus = 'failed';
+        state.authError = action.payload;
+      })
+
+
+
 
       // --- FETCH PROFILE ---
       .addCase(fetchUserProfile.fulfilled, (state, action) => {
